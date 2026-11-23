@@ -1,0 +1,2658 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Parque Cota Cero</title>
+<!--
+PARQUE COTA CERO · Números enteros · 1.º ESO · WebGL2 puro (sin bibliotecas, sin red)
+
+Referencias: dossier del encargo («Feria Neón 84», remix racionales, pod, La caverna, PRISMA, Trenes MCM) y
+«Paseo por el IES Concejo de Tineo» (personaje en 3.ª persona, HUD translúcido, joystick táctil).
+
+Decisiones de diseño:
+- En lugar de atracciones, nueve aventuras alrededor de la «cota cero» (el nivel del mar). La base es una isla
+  que se recorre caminando (WASD/flechas, joystick o tocando el suelo); al acercarse a un diorama, se selecciona.
+  Un selector accesible duplica todo para teclado y proyector. Cámara estable, sin pointer lock.
+- Cada animación muestra la causa matemática: reflejo en el lago, parejas burbuja/saco que se anulan,
+  palanca que convierte restar en sumar el opuesto, película que se rebobina con el tiempo negativo…
+- Música procedural (Web Audio) con un tema por escena que sigue a la animación: el arpegio sube con la altura,
+  el filtro se cierra bajo el agua, la melodía se invierte al rebobinar, chapoteos, pings de sonar y fanfarrias.
+- Motor propio: GLSL inline, VAO/VBO/IBO, instancing por geometría, matrices, picking por rayos.
+- Paleta: cian = positivo, coral = negativo, cero neutro con rombo ◇; ámbar = objetivo, menta = acierto, violeta = pista.
+
+Mapa de aventuras:
+ 1 Saltarrocas (situar)            2 Expedición vertical (ordenar)     3 El lago espejo (opuesto y |n|)
+ 4 Globo aerostático (sumar)       5 Avión anfibio (restar)            6 Submarino del tiempo (multiplicar)
+ 7 Teleférico (dividir)            8 Dron de rescate (combinadas)      9 La gran expedición (misión mixta)
+
+Autopruebas (panel docente): 100 casos por aventura (10 por nivel) + reproducibilidad de semilla.
+Última ejecución durante el desarrollo: 800/800 casos válidos y semilla reproducible.
+-->
+<style>
+:root {
+  --night: #0b1a20;
+  --night-2: #102730;
+  --panel: rgba(13, 31, 38, 0.86);
+  --panel-solid: #12303a;
+  --line: rgba(243, 236, 217, 0.18);
+  --ivory: #f3ecd9;
+  --muted: #b9c4bf;
+  --amber: #ffb53d;
+  --pos: #3fd6e8;
+  --neg: #ff6f86;
+  --zero: #e6e1d3;
+  --ok: #5ef0b0;
+  --hint: #b79bff;
+  --display: "Bahnschrift", "DIN Condensed", "Arial Narrow", "Roboto Condensed", "Liberation Sans Narrow", sans-serif;
+  --ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--night); color: var(--ivory); font-family: var(--ui); font-size: 16px; overflow: hidden; }
+[hidden] { display: none !important; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 3px solid var(--amber); outline-offset: 2px; }
+.num, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.pos { color: var(--pos); } .neg { color: var(--neg); } .zero { color: var(--zero); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+#gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+#labels { position: fixed; inset: 0; pointer-events: none; z-index: 1; overflow: hidden; }
+.lbl { position: absolute; left: 0; top: 0; transform: translate(-50%, -50%); font-family: var(--mono); font-weight: 700;
+  font-size: 18px; padding: 2px 7px; border-radius: 6px; background: rgba(8, 20, 25, .78); border: 1px solid var(--line);
+  white-space: nowrap; font-variant-numeric: tabular-nums; line-height: 1.25; }
+.lbl.big { font-size: 26px; padding: 3px 10px; }
+.lbl.small { font-size: 13px; padding: 1px 5px; }
+.lbl.title { font-family: var(--display); font-weight: 700; font-size: 17px; letter-spacing: .06em; text-transform: uppercase; color: var(--amber); }
+.lbl.pos { border-color: var(--pos); color: var(--pos); }
+.lbl.neg { border-color: var(--neg); color: var(--neg); }
+.lbl.zero { border-color: var(--zero); color: var(--zero); }
+.lbl.goal { border-color: var(--amber); color: var(--amber); }
+.lbl.ok { border-color: var(--ok); color: var(--ok); }
+.lbl.hint { border-color: var(--hint); color: var(--hint); }
+
+.screen { position: fixed; inset: 0; z-index: 2; pointer-events: none; }
+.screen > * { pointer-events: auto; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; backdrop-filter: blur(8px);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, .35); }
+.btn { min-height: 44px; min-width: 44px; padding: 8px 16px; border-radius: 10px; border: 1px solid var(--line);
+  background: rgba(243, 236, 217, .08); font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.btn:hover { background: rgba(243, 236, 217, .16); }
+.btn.primary { background: var(--amber); color: #1d1405; border-color: var(--amber); font-family: var(--display); font-size: 19px; letter-spacing: .04em; }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.hint { border-color: var(--hint); color: var(--hint); }
+.btn[disabled] { opacity: .45; cursor: not-allowed; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+h1, h2, h3 { font-family: var(--display); font-weight: 700; margin: 0; letter-spacing: .02em; text-wrap: balance; }
+
+/* Portada */
+#cover { display: grid; place-items: center; padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+#cover .card { max-width: 560px; padding: 28px; display: grid; gap: 14px; text-align: left; }
+#cover .eyebrow { font-family: var(--display); color: var(--amber); letter-spacing: .2em; text-transform: uppercase; font-size: 15px; }
+#cover h1 { font-size: clamp(44px, 9vw, 76px); line-height: .95; }
+#cover h1 .zero-mark { color: var(--zero); }
+#cover p { margin: 0; color: var(--muted); line-height: 1.55; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 14px; color: var(--muted); }
+.legend b { font-family: var(--mono); font-size: 16px; }
+
+/* Mapa */
+#map { padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); }
+#mapPanel { position: absolute; top: max(12px, env(safe-area-inset-top)); left: max(12px, env(safe-area-inset-left)); bottom: max(12px, env(safe-area-inset-bottom));
+  width: min(400px, calc(100vw - 24px)); display: flex; flex-direction: column; overflow: hidden; }
+#mapPanel header { padding: 14px 16px 8px; display: grid; gap: 4px; }
+#mapPanel header h2 { font-size: 30px; }
+#mapPanel header p { margin: 0; color: var(--muted); font-size: 14px; }
+#mapScroll { overflow-y: auto; padding: 4px 16px 16px; display: grid; gap: 14px; }
+.attr-list { display: grid; gap: 6px; list-style: none; margin: 0; padding: 0; }
+.attr { width: 100%; text-align: left; display: grid; grid-template-columns: 44px 1fr; gap: 10px; align-items: center;
+  padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: rgba(243, 236, 217, .04); min-height: 56px; }
+.attr[aria-selected="true"] { border-color: var(--amber); background: rgba(255, 181, 61, .12); }
+.attr .ico { width: 44px; height: 44px; border-radius: 9px; display: grid; place-items: center; font-family: var(--display); font-size: 22px; font-weight: 700; }
+.attr .nm { font-family: var(--display); font-size: 19px; font-weight: 700; display: block; }
+.attr .sk { font-size: 13px; color: var(--muted); display: block; }
+.detail { border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 8px; background: rgba(0, 0, 0, .18); }
+.detail h3 { font-size: 24px; }
+.detail p { margin: 0; line-height: 1.45; font-size: 15px; }
+.levels { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.levels button { min-height: 44px; border-radius: 9px; border: 1px solid var(--line); background: rgba(243, 236, 217, .05); font-family: var(--mono); font-size: 18px; font-weight: 700; }
+.levels button[aria-checked="true"] { background: var(--amber); color: #1d1405; border-color: var(--amber); }
+.lvl-desc { font-size: 14px; color: var(--ivory); line-height: 1.5; background: rgba(255, 181, 61, .08); border-left: 3px solid var(--amber); padding: 8px 10px; border-radius: 4px; }
+.toggles { display: grid; gap: 6px; font-size: 14px; }
+.toggles label { display: flex; align-items: center; gap: 10px; min-height: 44px; }
+.toggles input { width: 22px; height: 22px; accent-color: var(--amber); }
+#walkHint { position: absolute; right: max(16px, env(safe-area-inset-right)); top: max(16px, env(safe-area-inset-top)); padding: 10px 14px; font-size: 14px; color: var(--muted); max-width: 300px; line-height: 1.5; }
+#walkHint kbd, .kbd { font-family: var(--mono); font-size: 13px; border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; color: var(--ivory); background: rgba(255,255,255,.06); }
+#nearTag { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(24px + env(safe-area-inset-bottom)); padding: 10px 16px; display: flex; gap: 12px; align-items: center; }
+#nearTag strong { font-family: var(--display); font-size: 22px; }
+
+/* Actividad */
+#hud { position: absolute; top: max(8px, env(safe-area-inset-top)); left: max(8px, env(safe-area-inset-left)); right: max(8px, env(safe-area-inset-right));
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 8px 12px; }
+#hud .name { font-family: var(--display); font-size: 22px; font-weight: 700; }
+#hud .lv { font-family: var(--mono); color: var(--amber); font-size: 14px; border: 1px solid var(--amber); border-radius: 6px; padding: 1px 7px; }
+.cells { display: flex; gap: 4px; }
+.cells span { width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--line); display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+.cells span.cur { border-color: var(--amber); box-shadow: 0 0 0 2px rgba(255, 181, 61, .35); }
+.cells span.ok { background: var(--ok); color: #062015; border-color: var(--ok); }
+.cells span.help { background: var(--hint); color: #160c33; border-color: var(--hint); }
+.cells span.skip { background: rgba(243,236,217,.15); }
+#hud .stats { font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+#hud .spacer { flex: 1; }
+#task { position: absolute; right: max(8px, env(safe-area-inset-right)); bottom: max(8px, env(safe-area-inset-bottom)); width: min(440px, calc(100vw - 16px));
+  max-height: calc(100% - 110px); overflow-y: auto; padding: 14px; display: grid; gap: 10px; }
+#task .tour { font-family: var(--display); color: var(--amber); letter-spacing: .12em; text-transform: uppercase; font-size: 14px; }
+#prompt { font-size: 18px; line-height: 1.4; }
+#prompt .expr { display: block; font-family: var(--mono); font-size: clamp(24px, 4.5vw, 34px); font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+#controls { display: grid; gap: 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { min-height: 44px; min-width: 56px; padding: 6px 12px; border-radius: 10px; border: 2px solid var(--line); background: rgba(0,0,0,.25); font-family: var(--mono); font-size: 20px; font-weight: 700; }
+.chip.pos { border-color: var(--pos); } .chip.neg { border-color: var(--neg); } .chip.zero { border-color: var(--zero); }
+.chip[aria-pressed="true"] { background: var(--amber); color: #1d1405; border-color: var(--amber); }
+.chip.done { opacity: .55; text-decoration: underline; }
+.chip .ord { font-size: 13px; margin-left: 6px; color: inherit; }
+.field { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.field label { font-size: 15px; color: var(--muted); }
+.field input { width: 130px; min-height: 44px; border-radius: 9px; border: 2px solid var(--line); background: rgba(0,0,0,.35); padding: 4px 10px; font-family: var(--mono); font-size: 22px; font-weight: 700; }
+.field input:focus { border-color: var(--amber); }
+.expr-ops { font-family: var(--mono); font-size: clamp(22px, 4vw, 30px); font-weight: 700; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.expr-ops button { min-width: 44px; min-height: 44px; border-radius: 8px; border: 2px dashed var(--amber); background: rgba(255,181,61,.1); font-weight: 700; }
+.expr-ops button[disabled] { border-style: solid; opacity: .5; }
+.expr-ops .done { color: var(--ok); }
+.actions { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+.actions .primary { grid-column: 1 / -1; }
+#feedback { min-height: 24px; border-radius: 10px; padding: 0; line-height: 1.45; font-size: 16px; }
+#feedback.show { padding: 10px 12px; border: 1px solid var(--line); }
+#feedback.ok { border-color: var(--ok); background: rgba(94, 240, 176, .1); }
+#feedback.bad { border-color: var(--neg); background: rgba(255, 111, 134, .1); }
+#feedback.hint { border-color: var(--hint); background: rgba(183, 155, 255, .1); }
+#feedback .ic { font-family: var(--display); font-weight: 700; margin-right: 6px; }
+.lever { display: flex; align-items: center; gap: 10px; }
+.lever .btn[aria-pressed="true"] { background: var(--pos); color: #04202a; border-color: var(--pos); }
+
+/* Resumen */
+#sum { display: grid; place-items: center; padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+#sum .card { width: min(640px, 100%); max-height: 100%; overflow-y: auto; padding: 22px; display: grid; gap: 14px; }
+#sum h2 { font-size: 36px; }
+.score { display: flex; gap: 18px; flex-wrap: wrap; }
+.score div { display: grid; }
+.score b { font-family: var(--mono); font-size: 34px; }
+.score span { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+table.sk { width: 100%; border-collapse: collapse; font-size: 15px; }
+table.sk th, table.sk td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+table.sk td.n { font-family: var(--mono); text-align: right; }
+.reco { border-left: 3px solid var(--hint); padding: 8px 12px; background: rgba(183,155,255,.08); border-radius: 4px; line-height: 1.5; }
+
+/* Diálogos */
+dialog { background: var(--panel-solid); color: var(--ivory); border: 1px solid var(--line); border-radius: 14px; padding: 20px; width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 32px); }
+dialog::backdrop { background: rgba(4, 10, 12, .65); }
+dialog h3 { font-size: 26px; margin-bottom: 8px; }
+dialog p { line-height: 1.5; }
+dialog .field input { width: 200px; font-size: 18px; }
+#testOut { font-family: var(--mono); font-size: 13px; white-space: pre-wrap; max-height: 240px; overflow: auto; background: rgba(0,0,0,.3); padding: 8px; border-radius: 8px; }
+
+#stick { position: absolute; width: 120px; height: 120px; border-radius: 50%; border: 2px solid var(--line); background: rgba(255,255,255,.05);
+  right: calc(max(16px, env(safe-area-inset-right)) + 8px); bottom: calc(96px + env(safe-area-inset-bottom)); touch-action: none; }
+#stick::after { content: ""; position: absolute; left: 40px; top: 40px; width: 40px; height: 40px; border-radius: 50%; background: rgba(255,255,255,.28); transform: translate(var(--sx, 0px), var(--sy, 0px)); }
+@media (hover: hover) and (pointer: fine) { #stick { display: none; } }
+
+#nogl { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 24px; background: var(--night); }
+#nogl .card { max-width: 560px; padding: 24px; line-height: 1.55; }
+#toast { position: fixed; left: 50%; top: calc(70px + env(safe-area-inset-top)); transform: translateX(-50%); z-index: 6; padding: 8px 14px; pointer-events: none; }
+
+@media (max-width: 760px) {
+  #mapPanel { top: auto; height: 56%; width: auto; right: max(8px, env(safe-area-inset-right)); left: max(8px, env(safe-area-inset-left)); bottom: max(8px, env(safe-area-inset-bottom)); }
+  #walkHint { display: none; }
+  #nearTag { bottom: calc(58% + 8px); }
+  #stick { bottom: calc(58% + 70px); }
+  #task { left: max(8px, env(safe-area-inset-left)); width: auto; max-height: 52%; }
+  #hud .name { font-size: 18px; }
+  #prompt { font-size: 16px; }
+}
+@media (max-width: 760px) and (orientation: landscape) {
+  #mapPanel { top: max(8px, env(safe-area-inset-top)); height: auto; width: 46%; right: auto; }
+  #nearTag { bottom: 12px; left: 73%; }
+  #task { left: auto; width: 52%; max-height: calc(100% - 80px); }
+  #stick { bottom: 80px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<canvas id="gl" aria-label="Escena 3D del parque" role="img"></canvas>
+<div id="labels" aria-hidden="true"></div>
+
+<section id="cover" class="screen" aria-labelledby="coverTitle">
+  <div class="card">
+    <div class="eyebrow">Números enteros · 1.º ESO</div>
+    <h1 id="coverTitle">Parque Cota <span class="zero-mark">◇</span>Cero</h1>
+    <p>Una isla en la cota cero, el nivel del mar. Por encima vuelan avionetas y globos; por debajo bucean submarinos. Pasea por la base, elige una aventura y una intensidad del 1 al 10, y descubre por qué sale cada resultado.</p>
+    <div class="legend" aria-label="Código de colores">
+      <span><b class="pos">+3</b> positivo · arriba/derecha</span>
+      <span><b class="neg">−3</b> negativo · abajo/izquierda</span>
+      <span><b class="zero">◇ 0</b> cero</span>
+    </div>
+    <div class="row"><button class="btn primary" id="btnOpen" type="button">Abrir las puertas</button></div>
+  </div>
+</section>
+
+<section id="map" class="screen" aria-labelledby="mapTitle" hidden>
+  <div id="mapPanel" class="card">
+    <header>
+      <h2 id="mapTitle">Base Cota Cero</h2>
+      <p>Elige aventura e intensidad, o camina hasta su diorama.</p>
+    </header>
+    <div id="mapScroll">
+      <ul class="attr-list" id="attrList" role="listbox" aria-label="Aventuras"></ul>
+      <div class="detail" id="attrDetail" aria-live="polite"></div>
+      <div>
+        <h3 style="font-size:20px;margin-bottom:6px" id="lvlTitle">Intensidad</h3>
+        <div class="levels" id="levels" role="radiogroup" aria-labelledby="lvlTitle"></div>
+      </div>
+      <div class="lvl-desc" id="lvlDesc" aria-live="polite"></div>
+      <button class="btn primary" id="btnRide" type="button">Empezar la aventura</button>
+      <div class="toggles">
+        <label><input type="checkbox" id="optMotion"> Reducir movimiento</label>
+        <label><input type="checkbox" id="optSound"> Sonido</label>
+      </div>
+      <div class="row">
+        <button class="btn" id="btnRank" type="button">Ranking</button>
+        <button class="btn" id="btnTeacher" type="button">Panel docente</button>
+        <button class="btn" id="btnClear" type="button">Borrar progreso</button>
+      </div>
+    </div>
+  </div>
+  <div id="walkHint" class="card"><strong>Pasea por la base:</strong> <span class="kbd">W A S D</span> o flechas, o toca el suelo. Acércate a un diorama y pulsa <span class="kbd">Intro</span>.</div>
+  <div id="nearTag" class="card" hidden><strong id="nearName"></strong><button class="btn primary" id="btnNearRide" type="button">Empezar</button></div>
+  <div id="stick" aria-hidden="true"></div>
+</section>
+
+<section id="act" class="screen" aria-labelledby="actName" hidden>
+  <div id="hud" class="card">
+    <span class="name" id="actName"></span>
+    <span class="lv" id="actLevel"></span>
+    <div class="cells" id="cells" aria-label="Progreso de la sesión"></div>
+    <span class="stats" id="actStats"></span>
+    <span class="spacer"></span>
+    <button class="btn" id="btnBack" type="button">Volver a la base</button>
+  </div>
+  <div id="task" class="card">
+    <div class="tour" id="tourTag" hidden></div>
+    <div id="prompt"></div>
+    <div id="controls"></div>
+    <div class="actions">
+      <button class="btn primary" id="btnCheck" type="button">Comprobar</button>
+      <button class="btn hint" id="btnHint" type="button">Pista</button>
+      <button class="btn" id="btnReplay" type="button">Repetir animación</button>
+      <button class="btn" id="btnNew" type="button">Nuevo reto</button>
+      <button class="btn primary" id="btnNext" type="button" hidden>Siguiente reto</button>
+    </div>
+    <div id="feedback" role="status" aria-live="polite"></div>
+  </div>
+</section>
+
+<section id="sum" class="screen" aria-labelledby="sumTitle" hidden>
+  <div class="card" id="sumCard"></div>
+</section>
+
+<dialog id="dlgClear" aria-labelledby="dlgClearT">
+  <h3 id="dlgClearT">¿Borrar el progreso?</h3>
+  <p>Se borrarán los mejores resultados y las preferencias guardadas en este navegador. No se puede deshacer.</p>
+  <div class="row"><button class="btn" id="dlgClearNo" type="button">Cancelar</button><button class="btn primary" id="dlgClearYes" type="button">Borrar</button></div>
+</dialog>
+
+<dialog id="dlgTeacher" aria-labelledby="dlgTeacherT">
+  <h3 id="dlgTeacherT">Panel docente</h3>
+  <p>La semilla reproduce exactamente los mismos retos. Compártela con el grupo para que todos trabajen con los mismos números.</p>
+  <div class="field"><label for="seedIn">Semilla</label><input id="seedIn" type="text" inputmode="numeric" autocomplete="off"></div>
+  <div class="row" style="margin:10px 0">
+    <button class="btn" id="seedUse" type="button">Usar esta semilla</button>
+    <button class="btn" id="seedCopy" type="button">Copiar</button>
+    <button class="btn" id="seedRandom" type="button">Semilla nueva</button>
+  </div>
+  <h3 style="font-size:20px;margin:14px 0 6px">Ranking compartido (Google Sheets)</h3>
+  <div class="field"><label for="rkUrl">URL de Apps Script</label><input id="rkUrl" type="url" autocomplete="off" placeholder="https://script.google.com/macros/s/…/exec" style="width:100%"></div>
+  <div class="row" style="margin:8px 0"><button class="btn" id="rkSave" type="button">Guardar URL</button><button class="btn" id="rkTest" type="button">Probar conexión</button></div>
+  <p id="rkState" role="status" style="margin:0 0 12px;font-size:14px;color:var(--muted)"></p>
+  <div class="row" style="margin-bottom:8px"><button class="btn" id="runTests" type="button">Ejecutar autopruebas</button></div>
+  <div id="testOut" aria-live="polite">Las autopruebas generan 100 retos por atracción y verifican rango, divisiones exactas, intermedios enteros, respuesta única y validador.</div>
+  <div class="row" style="margin-top:12px"><button class="btn primary" id="dlgTeacherClose" type="button">Cerrar</button></div>
+</dialog>
+
+<dialog id="dlgRank" aria-labelledby="rankTitle">
+  <h3 id="rankTitle">Ranking</h3>
+  <div id="rankOut" aria-live="polite"></div>
+  <div class="row" style="margin-top:12px"><button class="btn primary" id="dlgRankClose" type="button">Cerrar</button></div>
+</dialog>
+
+<div id="toast" class="card" role="status" aria-live="polite" hidden></div>
+<div id="nogl" hidden><div class="card" role="alert"><h2>Este navegador no puede mostrar el parque en 3D</h2><p id="noglMsg">El parque necesita WebGL2. Prueba con una versión reciente de Chrome, Edge, Firefox o Safari, y comprueba que la aceleración por hardware está activada.</p></div></div>
+<script>
+"use strict";
+// ═════════════════════════════════════════════ 6. MOTOR WEBGL2
+// Utilidades mínimas de vectores y matrices (column-major, como espera GLSL).
+const V = {
+  sub: (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]],
+  add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
+  scale: (a, s) => [a[0] * s, a[1] * s, a[2] * s],
+  dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+  cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+  len: a => Math.hypot(a[0], a[1], a[2]),
+  norm: a => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; },
+  lerp: (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t],
+};
+const M4 = {
+  perspective(fovy, aspect, near, far) {
+    const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+    return new Float32Array([f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) * nf, -1, 0, 0, 2 * far * near * nf, 0]);
+  },
+  lookAt(eye, target, up) {
+    const z = V.norm(V.sub(eye, target)), x = V.norm(V.cross(up, z)), y = V.cross(z, x);
+    return new Float32Array([x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0, -V.dot(x, eye), -V.dot(y, eye), -V.dot(z, eye), 1]);
+  },
+  mul(a, b) {
+    const o = new Float32Array(16);
+    for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
+      let s = 0; for (let k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k]; o[c * 4 + r] = s;
+    }
+    return o;
+  },
+  invert(m) {
+    const inv = new Float32Array(16);
+    inv[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15] + m[9] * m[7] * m[14] + m[13] * m[6] * m[11] - m[13] * m[7] * m[10];
+    inv[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15] - m[8] * m[7] * m[14] - m[12] * m[6] * m[11] + m[12] * m[7] * m[10];
+    inv[8] = m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15] + m[8] * m[7] * m[13] + m[12] * m[5] * m[11] - m[12] * m[7] * m[9];
+    inv[12] = -m[4] * m[9] * m[14] + m[4] * m[10] * m[13] + m[8] * m[5] * m[14] - m[8] * m[6] * m[13] - m[12] * m[5] * m[10] + m[12] * m[6] * m[9];
+    inv[1] = -m[1] * m[10] * m[15] + m[1] * m[11] * m[14] + m[9] * m[2] * m[15] - m[9] * m[3] * m[14] - m[13] * m[2] * m[11] + m[13] * m[3] * m[10];
+    inv[5] = m[0] * m[10] * m[15] - m[0] * m[11] * m[14] - m[8] * m[2] * m[15] + m[8] * m[3] * m[14] + m[12] * m[2] * m[11] - m[12] * m[3] * m[10];
+    inv[9] = -m[0] * m[9] * m[15] + m[0] * m[11] * m[13] + m[8] * m[1] * m[15] - m[8] * m[3] * m[13] - m[12] * m[1] * m[11] + m[12] * m[3] * m[9];
+    inv[13] = m[0] * m[9] * m[14] - m[0] * m[10] * m[13] - m[8] * m[1] * m[14] + m[8] * m[2] * m[13] + m[12] * m[1] * m[10] - m[12] * m[2] * m[9];
+    inv[2] = m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15] + m[5] * m[3] * m[14] + m[13] * m[2] * m[7] - m[13] * m[3] * m[6];
+    inv[6] = -m[0] * m[6] * m[15] + m[0] * m[7] * m[14] + m[4] * m[2] * m[15] - m[4] * m[3] * m[14] - m[12] * m[2] * m[7] + m[12] * m[3] * m[6];
+    inv[10] = m[0] * m[5] * m[15] - m[0] * m[7] * m[13] - m[4] * m[1] * m[15] + m[4] * m[3] * m[13] + m[12] * m[1] * m[7] - m[12] * m[3] * m[5];
+    inv[14] = -m[0] * m[5] * m[14] + m[0] * m[6] * m[13] + m[4] * m[1] * m[14] - m[4] * m[2] * m[13] - m[12] * m[1] * m[6] + m[12] * m[2] * m[5];
+    inv[3] = -m[1] * m[6] * m[11] + m[1] * m[7] * m[10] + m[5] * m[2] * m[11] - m[5] * m[3] * m[10] - m[9] * m[2] * m[7] + m[9] * m[3] * m[6];
+    inv[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11] + m[4] * m[3] * m[10] + m[8] * m[2] * m[7] - m[8] * m[3] * m[6];
+    inv[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11] - m[4] * m[3] * m[9] - m[8] * m[1] * m[7] + m[8] * m[3] * m[5];
+    inv[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10] + m[4] * m[2] * m[9] + m[8] * m[1] * m[6] - m[8] * m[2] * m[5];
+    let det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
+    det = det ? 1 / det : 0;
+    for (let i = 0; i < 16; i++) inv[i] *= det;
+    return inv;
+  },
+  xform(m, p) {
+    const x = p[0], y = p[1], z = p[2];
+    const w = m[3] * x + m[7] * y + m[11] * z + m[15];
+    return [(m[0] * x + m[4] * y + m[8] * z + m[12]) / w, (m[1] * x + m[5] * y + m[9] * z + m[13]) / w, (m[2] * x + m[6] * y + m[10] * z + m[14]) / w, w];
+  },
+};
+const hex = h => [((h >> 16) & 255) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255];
+const COL = {
+  pos: hex(0x3fd6e8), neg: hex(0xff6f86), zero: hex(0xe6e1d3), amber: hex(0xffb53d), ok: hex(0x5ef0b0), hint: hex(0xb79bff),
+  ivory: hex(0xf3ecd9), steel: hex(0x6f8a94), dark: hex(0x1d3740), ground: hex(0x163038), wood: hex(0x8a6a4c), white: hex(0xffffff),
+};
+const signCol = n => n > 0 ? COL.pos : n < 0 ? COL.neg : COL.zero;
+
+const VS = `#version 300 es
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNor;
+layout(location=2) in vec3 iPos;
+layout(location=3) in vec3 iScale;
+layout(location=4) in vec3 iRot;
+layout(location=5) in vec4 iCol;
+layout(location=6) in float iEmis;
+uniform mat4 uVP;
+out vec3 vNor; out vec3 vWorld; out vec4 vCol; out float vEmis;
+mat3 rotY(float a){ float c=cos(a), s=sin(a); return mat3(c,0.,-s, 0.,1.,0., s,0.,c); }
+mat3 rotX(float a){ float c=cos(a), s=sin(a); return mat3(1.,0.,0., 0.,c,s, 0.,-s,c); }
+mat3 rotZ(float a){ float c=cos(a), s=sin(a); return mat3(c,s,0., -s,c,0., 0.,0.,1.); }
+void main(){
+  mat3 R = rotY(iRot.y) * rotX(iRot.x) * rotZ(iRot.z);
+  vec3 p = R * (aPos * iScale) + iPos;
+  vNor = normalize(R * (aNor / max(iScale, vec3(1e-4))));
+  vWorld = p; vCol = iCol; vEmis = iEmis;
+  gl_Position = uVP * vec4(p, 1.0);
+}`;
+const FS = `#version 300 es
+precision highp float;
+in vec3 vNor; in vec3 vWorld; in vec4 vCol; in float vEmis;
+uniform vec3 uEye; uniform vec3 uSun; uniform vec3 uFog; uniform float uFogDen;
+out vec4 outCol;
+void main(){
+  vec3 n = normalize(vNor);
+  vec3 v = normalize(uEye - vWorld);
+  float diff = max(dot(n, uSun), 0.0);
+  float hemi = 0.5 + 0.5 * n.y;
+  vec3 amb = mix(vec3(0.10, 0.13, 0.17), vec3(0.32, 0.38, 0.46), hemi);
+  float rim = pow(1.0 - max(dot(n, v), 0.0), 3.0) * 0.35;
+  vec3 h = normalize(uSun + v);
+  float spec = pow(max(dot(n, h), 0.0), 40.0) * 0.25;
+  vec3 c = vCol.rgb * (amb + diff * vec3(0.78, 0.74, 0.68)) + spec + rim * vCol.rgb;
+  c = mix(c, vCol.rgb * 1.35, clamp(vEmis, 0.0, 1.0));
+  float d = length(uEye - vWorld);
+  float f = 1.0 - exp(-pow(d * uFogDen, 1.6));
+  c = mix(c, uFog, clamp(f, 0.0, 1.0));
+  outCol = vec4(pow(c, vec3(1.0/1.12)), vCol.a);
+}`;
+
+const Engine = {
+  gl: null, canvas: null, prog: null, uni: {}, geos: {}, ok: false, lost: false,
+  queues: {}, dpr: 1, w: 1, h: 1, vp: null, invVP: null, eye: [0, 10, 10], target: [0, 0, 0],
+  pickables: [], fogColor: hex(0x0c1d24), ox: 0, oz: 0,
+  STRIDE: 14, MAXI: 4096,
+
+  init(canvas) {
+    this.canvas = canvas;
+    const gl = canvas.getContext("webgl2", { antialias: true, alpha: false, powerPreference: "high-performance" });
+    if (!gl) return { ok: false, msg: "Tu navegador o tu tarjeta gráfica no ofrecen WebGL2." };
+    this.gl = gl;
+    canvas.addEventListener("webglcontextlost", e => { e.preventDefault(); this.lost = true; this.ok = false; App.toast("Se ha perdido el contexto gráfico. Recuperando…"); });
+    canvas.addEventListener("webglcontextrestored", () => { this.lost = false; const r = this.setup(); if (r.ok) App.toast("Gráficos recuperados."); });
+    return this.setup();
+  },
+  setup() {
+    const gl = this.gl;
+    const sh = (type, src) => {
+      const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error("Error de shader: " + gl.getShaderInfoLog(s));
+      return s;
+    };
+    try {
+      const p = gl.createProgram();
+      gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS));
+      gl.linkProgram(p);
+      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error("Error al enlazar shaders: " + gl.getProgramInfoLog(p));
+      this.prog = p;
+    } catch (err) {
+      console.error(err);
+      return { ok: false, msg: err.message };
+    }
+    for (const u of ["uVP", "uEye", "uSun", "uFog", "uFogDen"]) this.uni[u] = gl.getUniformLocation(this.prog, u);
+    this.instData = new Float32Array(this.MAXI * this.STRIDE);
+    const G = Geo;
+    this.geos = {};
+    for (const [name, mk] of Object.entries({ box: G.box, cyl: G.cyl, sph: G.sph, cone: G.cone, torus: G.torus, ring: G.ring })) this.geos[name] = this.upload(mk());
+    gl.enable(gl.DEPTH_TEST);
+    gl.enable(gl.CULL_FACE);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    this.ok = true;
+    return { ok: true };
+  },
+  upload(g) {
+    const gl = this.gl, vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const vb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, vb);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(g.v), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 24, 0);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 24, 12);
+    const ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(g.i), gl.STATIC_DRAW);
+    const inst = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, inst);
+    gl.bufferData(gl.ARRAY_BUFFER, this.MAXI * this.STRIDE * 4, gl.DYNAMIC_DRAW);
+    const S = this.STRIDE * 4;
+    [[2, 3, 0], [3, 3, 12], [4, 3, 24], [5, 4, 36], [6, 1, 52]].forEach(([loc, n, off]) => {
+      gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, n, gl.FLOAT, false, S, off); gl.vertexAttribDivisor(loc, 1);
+    });
+    gl.bindVertexArray(null);
+    return { vao, inst, count: g.i.length };
+  },
+  resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, App.lowPower ? 1 : 1.75);
+    const w = Math.max(1, Math.floor(innerWidth * dpr)), h = Math.max(1, Math.floor(innerHeight * dpr));
+    if (this.canvas.width !== w || this.canvas.height !== h) { this.canvas.width = w; this.canvas.height = h; }
+    this.dpr = dpr; this.w = innerWidth; this.h = innerHeight;
+  },
+  begin(eye, target) {
+    this.eye = eye; this.target = target;
+    for (const k in this.geos) this.queues[k] = [];
+    this.pickables = [];
+    const proj = M4.perspective(this.w < 600 ? 1.05 : 0.9, this.w / this.h, 0.1, 400);
+    this.vp = M4.mul(proj, M4.lookAt(eye, target, [0, 1, 0]));
+    this.invVP = M4.invert(this.vp);
+  },
+  // Añade una instancia. o = {rx, ry, rz, emis, a}
+  add(geo, x, y, z, sx, sy, sz, col, o) {
+    const q = this.queues[geo]; if (!q || q.length >= this.MAXI) return;
+    q.push([x + this.ox, y, z + this.oz, sx, sy, sz, o?.rx || 0, o?.ry || 0, o?.rz || 0, col[0], col[1], col[2], o?.a ?? 1, o?.emis || 0]);
+  },
+  box(x, y, z, sx, sy, sz, col, o) { this.add("box", x, y, z, sx, sy, sz, col, o); },
+  cyl(x, y, z, r, h, col, o) { this.add("cyl", x, y, z, r * 2, h, r * 2, col, o); },
+  sph(x, y, z, r, col, o) { this.add("sph", x, y, z, r * 2, r * 2, r * 2, col, o); },
+  cone(x, y, z, r, h, col, o) { this.add("cone", x, y, z, r * 2, h, r * 2, col, o); },
+  torus(x, y, z, r, col, o) { this.add("torus", x, y, z, r * 2, r * 2, r * 2, col, o); },
+  ring(x, y, z, r, col, o) { this.add("ring", x, y, z, r * 2, 1, r * 2, col, o); },
+  // Segmento cilíndrico entre dos puntos.
+  beam(a, b, r, col, o) {
+    const d = V.sub(b, a), L = V.len(d); if (L < 1e-5) return;
+    const ry = Math.atan2(d[0], d[2]), rx = Math.acos(Math.max(-1, Math.min(1, d[1] / L)));
+    this.add("cyl", (a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2, r * 2, L, r * 2, col, { ...o, ry, rx });
+  },
+  pick(id, p, r) { this.pickables.push({ id, p: [p[0] + this.ox, p[1], p[2] + this.oz], r }); },
+  end() {
+    const gl = this.gl; if (!this.ok) return;
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    const fc = this.fogColor;
+    gl.clearColor(fc[0], fc[1], fc[2], 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.useProgram(this.prog);
+    gl.uniformMatrix4fv(this.uni.uVP, false, this.vp);
+    gl.uniform3fv(this.uni.uEye, this.eye);
+    gl.uniform3fv(this.uni.uSun, V.norm([-0.45, 0.8, 0.35]));
+    gl.uniform3fv(this.uni.uFog, fc);
+    gl.uniform1f(this.uni.uFogDen, 0.012);
+    // Opacos primero, luego transparentes (ordenados de lejos a cerca).
+    const transparent = [];
+    for (const [name, q] of Object.entries(this.queues)) {
+      const op = q.filter(r => r[12] >= 0.999);
+      for (const r of q) if (r[12] < 0.999) transparent.push([name, r]);
+      this.flush(name, op);
+    }
+    if (transparent.length) {
+      const e = this.eye;
+      transparent.sort((a, b) => ((b[1][0] - e[0]) ** 2 + (b[1][1] - e[1]) ** 2 + (b[1][2] - e[2]) ** 2) - ((a[1][0] - e[0]) ** 2 + (a[1][1] - e[1]) ** 2 + (a[1][2] - e[2]) ** 2));
+      gl.depthMask(false);
+      for (const [name, r] of transparent) this.flush(name, [r]);
+      gl.depthMask(true);
+    }
+  },
+  flush(name, rows) {
+    if (!rows.length) return;
+    const gl = this.gl, g = this.geos[name], d = this.instData, S = this.STRIDE;
+    for (let i = 0; i < rows.length; i++) d.set(rows[i], i * S);
+    gl.bindVertexArray(g.vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, g.inst);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, d, 0, rows.length * S);
+    gl.drawElementsInstanced(gl.TRIANGLES, g.count, gl.UNSIGNED_SHORT, 0, rows.length);
+    gl.bindVertexArray(null);
+  },
+  project(p) {
+    const c = M4.xform(this.vp, p);
+    if (c[3] <= 0) return null;
+    return [(c[0] * 0.5 + 0.5) * this.w, (1 - (c[1] * 0.5 + 0.5)) * this.h, c[2]];
+  },
+  ray(px, py) {
+    const nx = px / this.w * 2 - 1, ny = 1 - py / this.h * 2;
+    const a = M4.xform(this.invVP, [nx, ny, -1]), b = M4.xform(this.invVP, [nx, ny, 1]);
+    return { o: a.slice(0, 3), d: V.norm(V.sub(b.slice(0, 3), a.slice(0, 3))) };
+  },
+  hitTest(px, py) {
+    const r = this.ray(px, py); let best = null, bt = Infinity;
+    for (const k of this.pickables) {
+      const oc = V.sub(r.o, k.p), b = V.dot(oc, r.d), c = V.dot(oc, oc) - k.r * k.r, disc = b * b - c;
+      if (disc < 0) continue;
+      const t = -b - Math.sqrt(disc);
+      if (t > 0 && t < bt) { bt = t; best = k.id; }
+    }
+    return best;
+  },
+  groundHit(px, py, y = 0) {
+    const r = this.ray(px, py); if (Math.abs(r.d[1]) < 1e-5) return null;
+    const t = (y - r.o[1]) / r.d[1]; if (t < 0) return null;
+    return V.add(r.o, V.scale(r.d, t));
+  },
+};
+
+// Geometrías procedurales (unidad: caben en un cubo de lado 1 centrado).
+const Geo = {
+  box() {
+    const v = [], i = [];
+    const F = [[[0, 0, 1], [1, 0, 0], [0, 1, 0]], [[0, 0, -1], [-1, 0, 0], [0, 1, 0]], [[1, 0, 0], [0, 0, -1], [0, 1, 0]],
+      [[-1, 0, 0], [0, 0, 1], [0, 1, 0]], [[0, 1, 0], [1, 0, 0], [0, 0, -1]], [[0, -1, 0], [1, 0, 0], [0, 0, 1]]];
+    for (const [n, u, w] of F) {
+      const b = v.length / 6;
+      for (const [su, sw] of [[-1, -1], [1, -1], [1, 1], [-1, 1]])
+        v.push(n[0] * .5 + u[0] * su * .5 + w[0] * sw * .5, n[1] * .5 + u[1] * su * .5 + w[1] * sw * .5, n[2] * .5 + u[2] * su * .5 + w[2] * sw * .5, ...n);
+      i.push(b, b + 1, b + 2, b, b + 2, b + 3);
+    }
+    return { v, i };
+  },
+  cyl(seg = 20, top = 0.5) {
+    const v = [], i = [];
+    const bot = 0.5, slope = (bot - top);
+    for (let k = 0; k <= seg; k++) {
+      const a = k / seg * Math.PI * 2, c = Math.cos(a), s = Math.sin(a), n = V.norm([c, slope, s]);
+      v.push(c * bot, -.5, s * bot, ...n, c * top, .5, s * top, ...n);
+    }
+    for (let k = 0; k < seg; k++) { const a = k * 2; i.push(a, a + 1, a + 3, a, a + 3, a + 2); }
+    for (const [y, r, ny] of [[.5, top, 1], [-.5, bot, -1]]) {
+      if (r <= 0) continue;
+      const c0 = v.length / 6; v.push(0, y, 0, 0, ny, 0);
+      for (let k = 0; k <= seg; k++) { const a = k / seg * Math.PI * 2; v.push(Math.cos(a) * r, y, Math.sin(a) * r, 0, ny, 0); }
+      for (let k = 0; k < seg; k++) ny > 0 ? i.push(c0, c0 + k + 2, c0 + k + 1) : i.push(c0, c0 + k + 1, c0 + k + 2);
+    }
+    return { v, i };
+  },
+  cone() { return Geo.cyl(20, 0); },
+  sph(seg = 16, rings = 10) {
+    const v = [], i = [];
+    for (let r = 0; r <= rings; r++) {
+      const th = r / rings * Math.PI;
+      for (let s = 0; s <= seg; s++) {
+        const ph = s / seg * Math.PI * 2, n = [Math.sin(th) * Math.cos(ph), Math.cos(th), Math.sin(th) * Math.sin(ph)];
+        v.push(n[0] * .5, n[1] * .5, n[2] * .5, ...n);
+      }
+    }
+    for (let r = 0; r < rings; r++) for (let s = 0; s < seg; s++) {
+      const a = r * (seg + 1) + s, b = a + seg + 1; i.push(a, a + 1, b, a + 1, b + 1, b);
+    }
+    return { v, i };
+  },
+  torus(seg = 40, sides = 8, R = 0.46, r = 0.04) {
+    const v = [], i = [];
+    for (let a = 0; a <= seg; a++) {
+      const u = a / seg * Math.PI * 2;
+      for (let b = 0; b <= sides; b++) {
+        const w = b / sides * Math.PI * 2, n = [Math.cos(u) * Math.cos(w), Math.sin(w), Math.sin(u) * Math.cos(w)];
+        v.push(Math.cos(u) * (R + r * Math.cos(w)), r * Math.sin(w), Math.sin(u) * (R + r * Math.cos(w)), ...n);
+      }
+    }
+    for (let a = 0; a < seg; a++) for (let b = 0; b < sides; b++) {
+      const p = a * (sides + 1) + b, q = p + sides + 1; i.push(p, q, p + 1, p + 1, q, q + 1);
+    }
+    return { v, i };
+  },
+  ring() { // disco plano (altura unidad muy fina) para marcas en el suelo
+    const v = [], i = [], seg = 32;
+    v.push(0, 0, 0, 0, 1, 0);
+    for (let k = 0; k <= seg; k++) { const a = k / seg * Math.PI * 2; v.push(Math.cos(a) * .5, 0, Math.sin(a) * .5, 0, 1, 0); }
+    for (let k = 0; k < seg; k++) i.push(0, k + 2, k + 1);
+    return { v, i };
+  },
+};
+
+// Rótulos DOM proyectados desde puntos 3D.
+const Labels = {
+  root: null, pool: new Map(), used: new Set(),
+  init(root) { this.root = root; },
+  begin() { this.used.clear(); },
+  put(key, text, p, cls = "", dy = 0) {
+    let el = this.pool.get(key);
+    if (!el) { el = document.createElement("div"); el.className = "lbl"; this.root.appendChild(el); this.pool.set(key, el); el._t = null; el._c = null; }
+    if (el._t !== text) { el.textContent = text; el._t = text; }
+    const c = "lbl " + cls; if (el._c !== c) { el.className = c; el._c = c; }
+    const s = Engine.project(p);
+    if (!s || s[2] > 1) { el.style.display = "none"; return; }
+    el.style.display = "";
+    el.style.transform = `translate(${s[0].toFixed(1)}px, ${(s[1] + dy).toFixed(1)}px) translate(-50%, -50%)`;
+    this.used.add(key);
+  },
+  end() { for (const [k, el] of this.pool) if (!this.used.has(k)) el.style.display = "none"; },
+  clear() { for (const el of this.pool.values()) el.remove(); this.pool.clear(); },
+};
+const fmt = n => n > 0 ? "+" + n : n < 0 ? "−" + Math.abs(n) : "0";
+const fmtP = n => n < 0 ? "(" + fmt(n) + ")" : String(n);
+const fmtPlain = n => n < 0 ? "−" + Math.abs(n) : String(n);
+const signCls = n => n > 0 ? "pos" : n < 0 ? "neg" : "zero";
+
+// ═════════════════════════════════════════════ 1. CONFIG y DIFFICULTY
+const CONFIG = { RETOS: 8, STORE: "parqueCotaCero.v1" };
+// Tabla central: TODO lo que depende del nivel sale de aquí.
+//  max: |n| máximo · count: valores a situar · step: separación de marcas en la vía
+//  factor: |factor| máximo en × y ÷ · terms: sumandos · combo: operaciones combinadas
+const DIFFICULTY = [
+  { level: 1, max: 5, count: 2, step: 1, factor: 3, terms: 2, combo: { ops: 2, paren: false, max: 5, fmax: 3 } },
+  { level: 2, max: 10, count: 2, step: 1, factor: 4, terms: 2, combo: { ops: 2, paren: false, max: 10, fmax: 4 } },
+  { level: 3, max: 15, count: 3, step: 1, factor: 5, terms: 2, combo: { ops: 2, paren: false, max: 10, fmax: 5 } },
+  { level: 4, max: 20, count: 3, step: 2, factor: 6, terms: 2, combo: { ops: 2, paren: true, max: 12, fmax: 5 } },
+  { level: 5, max: 30, count: 4, step: 2, factor: 7, terms: 2, combo: { ops: 2, paren: true, max: 15, fmax: 6 } },
+  { level: 6, max: 50, count: 4, step: 5, factor: 8, terms: 2, combo: { ops: 3, paren: true, max: 15, fmax: 6 } },
+  { level: 7, max: 75, count: 5, step: 5, factor: 9, terms: 2, combo: { ops: 3, paren: true, max: 20, fmax: 7 } },
+  { level: 8, max: 100, count: 5, step: 10, factor: 10, terms: 3, combo: { ops: 3, paren: true, max: 20, fmax: 8 } },
+  { level: 9, max: 250, count: 6, step: 25, factor: 12, terms: 3, combo: { ops: 3, paren: true, max: 25, fmax: 9 } },
+  { level: 10, max: 500, count: 6, step: 50, factor: 15, terms: 3, combo: { ops: 3, paren: true, max: 30, fmax: 10 } },
+];
+const D = lvl => DIFFICULTY[Math.max(1, Math.min(10, lvl)) - 1];
+
+// ═════════════════════════════════════════════ 2. PRNG y semillas
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+function makeRng(seed) {
+  const r = mulberry32(seed);
+  const rng = {
+    seed, next: r,
+    int: (a, b) => a + Math.floor(r() * (b - a + 1)),
+    nz: (m) => { let v = 0; while (v === 0) v = rng.int(-m, m); return v; },
+    sign: () => r() < 0.5 ? -1 : 1,
+    pick: arr => arr[Math.floor(r() * arr.length)],
+    chance: p => r() < p,
+    shuffle: arr => { const a = arr.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; },
+  };
+  return rng;
+}
+const newSeed = () => (Date.now() ^ Math.floor(Math.random() * 1e9)) % 1000000;
+
+// ═════════════════════════════════════════════ 3. Utilidades matemáticas
+const sgn = n => n > 0 ? 1 : n < 0 ? -1 : 0;
+const isInt = n => Number.isInteger(n);
+// Lee un entero escrito por el alumno: admite "−5", "-5", "+5", " 5 ".
+function parseIntLoose(s) {
+  if (typeof s !== "string") return null;
+  const t = s.trim().replace(/[−–—]/g, "-").replace(/\s+/g, "").replace(/^\((.*)\)$/, "$1");
+  if (!/^[+-]?\d+$/.test(t)) return null;
+  const v = parseInt(t, 10);
+  return Number.isSafeInteger(v) ? (Object.is(v, -0) ? 0 : v) : null;
+}
+const TAGS = {
+  signo: "Ignorar el signo de un número",
+  absoluto: "Comparar valores absolutos en lugar de posiciones (pensar que −8 > −3)",
+  colocacion: "Situar un número en una posición cercana pero incorrecta",
+  opuesto: "Confundir el opuesto con el valor absoluto",
+  absneg: "Dar un valor absoluto negativo",
+  anula: "Sumar los valores sin dejar que las cargas opuestas se anulen",
+  restaOpuesto: "Restar sin cambiar al opuesto del sustraendo",
+  inversion: "Invertir minuendo y sustraendo",
+  dobleNeg: "Fallar con el doble negativo",
+  reglaSignos: "Aplicar mal la regla de los signos",
+  calculo: "Error de cálculo con el signo correcto",
+  jerarquia: "Operar en un orden incorrecto (jerarquía o paréntesis)",
+  comparar: "Comparar mal dos expresiones",
+};
+
+// ═════════════════════════════════════════════ 4. MathModel y QuestionFactory
+const MathModel = {
+  // 1 · Situar en la recta (montaña rusa)
+  situar(rng, L) {
+    const d = D(L), step = d.step, M = d.max, k = d.count;
+    const ticks = []; for (let v = -M; v <= M; v += step) ticks.push(v);
+    let vals;
+    for (let tries = 0; tries < 200; tries++) {
+      let pool = ticks;
+      if (L >= 7) { // números más próximos: ventana estrecha alrededor de un centro
+        const c = rng.int(-Math.floor(ticks.length / 4), Math.floor(ticks.length / 4)) * step;
+        pool = ticks.filter(v => Math.abs(v - c) <= step * (k + 2));
+      }
+      if (L < 3) pool = pool.filter(v => v !== 0);
+      vals = rng.shuffle(pool).slice(0, k);
+      if (L >= 3 && k >= 3 && !vals.includes(0) && rng.chance(0.35)) vals[k - 1] = 0;
+      vals = [...new Set(vals)];
+      if (vals.length === k && vals.some(v => v < 0) && vals.some(v => v > 0)) break;
+    }
+    return { kind: "situar", level: L, values: vals, min: -M, max: M, step, ticks, answer: vals.slice(),
+      text: `Sitúa en la vía: ${vals.map(fmt).join(", ")}` };
+  },
+  // 2 · Ordenar (torre de caída)
+  ordenar(rng, L) {
+    const d = D(L), M = d.max, n = Math.min(6, d.count + 1);
+    let vals;
+    for (let tries = 0; tries < 200; tries++) {
+      const set = new Set();
+      const w = L >= 6 ? Math.max(n + 3, Math.round(M / 6)) : M;
+      const c = L >= 6 ? rng.int(-M + w, M - w) : 0;
+      // Trampa didáctica desde el nivel 3: un par con el mismo valor absoluto o dos negativos próximos.
+      if (L >= 3) { const a = rng.int(2, Math.min(M, w)); set.add(-a); set.add(rng.chance(0.5) ? a : -Math.max(1, a - rng.int(1, 3))); }
+      while (set.size < n) set.add(rng.int(Math.max(-M, c - w), Math.min(M, c + w)));
+      vals = rng.shuffle([...set].slice(0, n));
+      if (vals.filter(v => v < 0).length >= 1 && vals.every(v => Math.abs(v) <= M)) break;
+    }
+    return { kind: "ordenar", level: L, values: vals, answer: vals.slice().sort((a, b) => a - b), max: M,
+      text: `Ordena de menor a mayor: ${vals.map(fmt).join(", ")}` };
+  },
+  // 3 · Opuesto y valor absoluto (casa de los espejos)
+  espejos(rng, L) {
+    const M = D(L).max;
+    const types = L <= 3 ? ["opabs"] : L <= 5 ? ["opabs", "absk"] : ["opabs", "absk", "cmp", "cmp"];
+    const t = rng.pick(types);
+    if (t === "opabs") {
+      const n = rng.nz(M);
+      return { kind: "espejos", sub: "opabs", level: L, n, answer: { opp: -n, abs: Math.abs(n) }, max: M,
+        text: `Halla el opuesto y el valor absoluto de ${fmt(n)}` };
+    }
+    if (t === "absk") {
+      const k = rng.int(1, M);
+      return { kind: "espejos", sub: "absk", level: L, k, answer: { set: [k, -k] }, max: M,
+        text: `¿Qué dos números tienen valor absoluto ${k}?` };
+    }
+    // cmp: dos expresiones con opuesto/valor absoluto, elegir <, = o >
+    const forms = [
+      { s: a => `|${fmt(a)}|`, v: a => Math.abs(a) },
+      { s: a => `−(${fmt(a)})`, v: a => -a },
+      { s: a => `−|${fmt(a)}|`, v: a => -Math.abs(a) },
+      { s: a => fmt(a), v: a => a },
+    ];
+    let a, b, f1, f2, v1, v2;
+    for (let tries = 0; tries < 100; tries++) {
+      a = rng.nz(M); b = rng.chance(0.3) ? -a : rng.nz(M);
+      f1 = rng.pick(forms.slice(0, 3)); f2 = rng.pick(forms);
+      v1 = f1.v(a); v2 = f2.v(b);
+      // Evita comparaciones donde ignorar el signo daría la misma respuesta (no enseñan nada).
+      const naive = sgn(Math.abs(v1) - Math.abs(v2));
+      if (sgn(v1 - v2) !== naive || rng.chance(0.25)) break;
+    }
+    const rel = v1 < v2 ? "<" : v1 > v2 ? ">" : "=";
+    return { kind: "espejos", sub: "cmp", level: L, a, b, e1: f1.s(a), e2: f2.s(b), v1, v2, answer: { rel }, max: M,
+      text: `Compara: ${f1.s(a)}  ☐  ${f2.s(b)}` };
+  },
+  // 4 · Suma (coches de choque)
+  sumar(rng, L) {
+    const d = D(L), M = d.max, t = d.terms;
+    let terms, r;
+    for (let tries = 0; tries < 500; tries++) {
+      terms = Array.from({ length: t }, () => rng.nz(M));
+      r = terms.reduce((s, x) => s + x, 0);
+      const mixed = terms.some(x => x > 0) && terms.some(x => x < 0);
+      const crosses = sgn(r) !== sgn(terms[0]);
+      if (Math.abs(r) > M) continue;
+      if (L === 1 && !terms.some(x => x < 0)) continue;
+      if (L >= 2 && !mixed) continue;
+      if (L >= 4 && !crosses && rng.chance(0.6)) continue;
+      break;
+    }
+    const units = L <= 4 && terms.reduce((s, x) => s + Math.abs(x), 0) <= 40;
+    return { kind: "sumar", level: L, terms, answer: r, units, max: M,
+      text: `Calcula ${terms.map((x, i) => i ? fmtP(x) : fmt(x)).join(" + ")}` };
+  },
+  // 5 · Resta (tren magnético)
+  restar(rng, L) {
+    const M = D(L).max;
+    let a, b;
+    for (let tries = 0; tries < 500; tries++) {
+      a = rng.int(-M, M); b = rng.nz(M);
+      if (Math.abs(a - b) > M || a === 0 && L > 2) continue;
+      if (L >= 2 && b > 0 && rng.chance(0.55)) continue; // más sustraendos negativos
+      if (L >= 4 && sgn(a - b) === sgn(a) && rng.chance(0.5)) continue; // cruces por cero
+      break;
+    }
+    return { kind: "restar", level: L, a, b, answer: a - b, max: M, text: `Calcula ${fmt(a)} − ${fmtP(b)}` };
+  },
+  // 6 · Multiplicación (noria)
+  multiplicar(rng, L) {
+    const F = D(L).factor;
+    let a, b;
+    for (let tries = 0; tries < 200; tries++) {
+      a = rng.nz(F); b = rng.nz(F);
+      if (L <= 2 && rng.chance(0.08)) b = 0;
+      if (a > 0 && b > 0) continue;
+      if (L >= 3 && Math.abs(a) < 2 && Math.abs(b) < 2) continue;
+      break;
+    }
+    return { kind: "multiplicar", level: L, a, b, answer: a * b, factor: F, text: `Calcula ${fmt(a)} · ${fmtP(b)}` };
+  },
+  // 7 · División exacta (túnel)
+  dividir(rng, L) {
+    const F = D(L).factor;
+    let a, b, q;
+    for (let tries = 0; tries < 200; tries++) {
+      b = rng.sign() * rng.int(2, Math.max(2, F)); q = rng.nz(F); a = b * q;
+      if (a > 0 && b > 0) continue;
+      break;
+    }
+    return { kind: "dividir", level: L, a, b, answer: q, factor: F, text: `Calcula ${fmt(a)} : ${fmtP(b)}` };
+  },
+  // 8 · Operaciones combinadas (laberinto)
+  combinadas(rng, L) {
+    const c = D(L).combo;
+    const forms2 = ["a+b*c", "a*b-c", "a-b*c", "a-b/c", "a*b+c"];
+    const formsP = ["(a+b)*c", "a-(b-c)", "a*(b+c)", "(a-b)/c"];
+    const forms3 = ["(a-b)*c+d", "a-b*(c+d)", "(a+b)/c-d", "a*b-(c-d)", "a+b*c-d"];
+    const pool = c.ops === 2 ? (c.paren ? formsP.concat(forms2.slice(0, 2)) : forms2) : forms3;
+    for (let tries = 0; tries < 2000; tries++) {
+      const form = rng.pick(pool);
+      const vars = {};
+      // Factores (al lado de * o /) pequeños; sumandos hasta combo.max.
+      for (const ch of "abcd") if (form.includes(ch)) {
+        const idx = form.indexOf(ch), prev = form[idx - 1], next = form[idx + 1];
+        const isFactor = "*/".includes(prev) || "*/".includes(next) || (prev === "(" && false);
+        vars[ch] = isFactor ? rng.sign() * rng.int(2, c.fmax) : rng.nz(c.max);
+      }
+      // Dividendo de una división directa: múltiplo exacto del divisor.
+      const dv = form.match(/([abcd])\/([abcd])/);
+      if (dv) vars[dv[1]] = vars[dv[2]] * rng.sign() * rng.int(1, c.fmax);
+      const tokens = tokenize(form, vars);
+      const sol = solveTokens(tokens);
+      if (!sol.ok) continue;
+      if (sol.steps.some(s => Math.abs(s.result) > 200) || Math.abs(sol.value) > 200) continue;
+      if (!Object.values(vars).some(v => v < 0)) continue;
+      return { kind: "combinadas", level: L, form, vars, tokens, answer: sol.value, steps: sol.steps, combo: c,
+        text: `Resuelve ${tokensToString(tokens)}` };
+    }
+    throw new Error("No se pudo generar una operación combinada válida");
+  },
+};
+
+// Expresiones: tokens = números, "+", "-", "*", "/", "(", ")".
+function tokenize(form, vars) {
+  return [...form].map(ch => "abcd".includes(ch) ? { t: "n", v: vars[ch] } : { t: ch });
+}
+function tokensToString(tk) {
+  let s = "";
+  tk.forEach((x, i) => {
+    if (x.t === "n") s += (x.v < 0 && i > 0 && tk[i - 1].t !== "(" ? `(${fmtPlain(x.v)})` : fmtPlain(x.v));
+    else s += { "+": " + ", "-": " − ", "*": " · ", "/": " : ", "(": "(", ")": ")" }[x.t];
+  });
+  return s;
+}
+const isOp = t => "+-*/".includes(t);
+// ¿Se puede efectuar ya la operación en la posición k? (convenio: paréntesis, después · y :, de izquierda a derecha)
+function opAllowed(tk, k) {
+  const op = tk[k]; if (!op || !isOp(op.t)) return false;
+  if (tk[k - 1]?.t !== "n" || tk[k + 1]?.t !== "n") return false;
+  // grupo: desde el paréntesis abierto que lo contiene hasta su cierre
+  let lo = k, depth = 0;
+  for (lo = k - 1; lo >= 0; lo--) { if (tk[lo].t === ")") depth++; else if (tk[lo].t === "(") { if (depth === 0) break; depth--; } }
+  let hi = k; depth = 0;
+  for (hi = k + 1; hi < tk.length; hi++) { if (tk[hi].t === "(") depth++; else if (tk[hi].t === ")") { if (depth === 0) break; depth--; } }
+  const same = []; depth = 0; // operadores del mismo nivel dentro del grupo
+  for (let i = lo + 1; i < hi; i++) { const t = tk[i].t; if (t === "(") depth++; else if (t === ")") depth--; else if (depth === 0 && isOp(t)) same.push(i); }
+  const mulDiv = t => t === "*" || t === "/";
+  if (mulDiv(op.t)) {
+    // no puede haber un · o : anterior en la misma cadena multiplicativa
+    for (let i = k - 2; i > lo; i -= 2) { const t = tk[i]?.t; if (!t || !isOp(t)) break; if (mulDiv(t)) return false; break; }
+    return true;
+  }
+  // suma/resta: operandos no ligados a · o :, y ninguna suma/resta pendiente a su izquierda en el grupo
+  if (mulDiv(tk[k - 2]?.t) || mulDiv(tk[k + 2]?.t)) return false;
+  if (tk[k + 2]?.t === "(" || tk[k - 2]?.t === ")") { /* el operando es un número aislado: válido */ }
+  for (const i of same) if (i < k && !mulDiv(tk[i].t)) return false;
+  return true;
+}
+function applyOp(tk, k) {
+  const a = tk[k - 1].v, b = tk[k + 1].v, o = tk[k].t;
+  let r;
+  if (o === "+") r = a + b; else if (o === "-") r = a - b; else if (o === "*") r = a * b;
+  else { if (b === 0 || a % b !== 0) return null; r = a / b; }
+  if (Object.is(r, -0)) r = 0;
+  let out = tk.slice(0, k - 1).concat([{ t: "n", v: r }], tk.slice(k + 2));
+  // quitar paréntesis que rodean un único número
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let i = 0; i + 2 < out.length; i++) if (out[i].t === "(" && out[i + 1].t === "n" && out[i + 2].t === ")") { out = out.slice(0, i).concat([out[i + 1]], out.slice(i + 3)); changed = true; break; }
+  }
+  return { tokens: out, a, b, op: o, result: r };
+}
+function solveTokens(tk) {
+  const steps = []; let cur = tk;
+  for (let guard = 0; guard < 20 && cur.length > 1; guard++) {
+    const k = cur.findIndex((_, i) => opAllowed(cur, i));
+    if (k < 0) return { ok: false };
+    const r = applyOp(cur, k); if (!r) return { ok: false };
+    steps.push({ before: cur, k, a: r.a, b: r.b, op: r.op, result: r.result, after: r.tokens });
+    cur = r.tokens;
+  }
+  if (cur.length !== 1 || cur[0].t !== "n") return { ok: false };
+  return { ok: true, value: cur[0].v, steps };
+}
+
+// ═════════════════════════════════════════════ Validadores y diagnósticos
+const Validate = {
+  situar(q) {
+    const e = [], d = D(q.level);
+    if (new Set(q.values).size !== q.values.length) e.push("valores repetidos");
+    for (const v of q.values) { if (Math.abs(v) > d.max) e.push("fuera de rango " + v); if (v % d.step !== 0) e.push("no es múltiplo del paso " + v); }
+    if (!q.values.some(v => v < 0) || !q.values.some(v => v > 0)) e.push("faltan signos");
+    if (q.values.length !== d.count) e.push("cantidad incorrecta");
+    return e;
+  },
+  ordenar(q) {
+    const e = [];
+    if (new Set(q.values).size !== q.values.length) e.push("valores repetidos (orden no único)");
+    if (q.values.some(v => Math.abs(v) > D(q.level).max)) e.push("fuera de rango");
+    const s = q.values.slice().sort((a, b) => a - b);
+    if (s.join() !== q.answer.join()) e.push("solución distinta del orden");
+    return e;
+  },
+  espejos(q) {
+    const e = [], M = D(q.level).max;
+    if (q.sub === "opabs") { if (q.n === 0 || Math.abs(q.n) > M) e.push("n inválido"); if (q.answer.opp !== -q.n || q.answer.abs !== Math.abs(q.n)) e.push("solución"); }
+    if (q.sub === "absk") { if (q.k < 1 || q.k > M) e.push("k inválido"); }
+    if (q.sub === "cmp") { const rel = q.v1 < q.v2 ? "<" : q.v1 > q.v2 ? ">" : "="; if (rel !== q.answer.rel) e.push("relación"); if (Math.abs(q.a) > M || Math.abs(q.b) > M) e.push("rango"); }
+    return e;
+  },
+  sumar(q) {
+    const e = [], M = D(q.level).max;
+    if (q.terms.length !== D(q.level).terms) e.push("nº de términos");
+    if (q.terms.some(x => x === 0 || Math.abs(x) > M)) e.push("término fuera de rango");
+    if (q.terms.reduce((s, x) => s + x, 0) !== q.answer) e.push("solución");
+    if (Math.abs(q.answer) > M) e.push("resultado fuera de rango");
+    return e;
+  },
+  restar(q) {
+    const e = [], M = D(q.level).max;
+    if (q.b === 0 || Math.abs(q.a) > M || Math.abs(q.b) > M) e.push("rango");
+    if (q.a - q.b !== q.answer || Math.abs(q.answer) > M) e.push("solución");
+    return e;
+  },
+  multiplicar(q) {
+    const e = [], F = D(q.level).factor;
+    if (Math.abs(q.a) > F || Math.abs(q.b) > F) e.push("factor fuera de rango");
+    if (q.a * q.b !== q.answer) e.push("solución");
+    if (q.a > 0 && q.b > 0) e.push("sin negativos");
+    return e;
+  },
+  dividir(q) {
+    const e = [], F = D(q.level).factor;
+    if (q.b === 0) e.push("divisor cero");
+    if (q.b !== 0 && q.a % q.b !== 0) e.push("división no exacta");
+    if (Math.abs(q.b) > F || Math.abs(q.answer) > F) e.push("rango");
+    if (q.b !== 0 && q.a / q.b !== q.answer) e.push("solución");
+    return e;
+  },
+  combinadas(q) {
+    const e = [];
+    const sol = solveTokens(q.tokens);
+    if (!sol.ok) e.push("no resoluble");
+    else {
+      if (sol.value !== q.answer) e.push("solución");
+      if (sol.steps.some(s => !isInt(s.result))) e.push("intermedio no entero");
+      if (sol.steps.some(s => s.op === "/" && (s.b === 0 || s.a % s.b !== 0))) e.push("división no exacta");
+      if (sol.steps.length !== q.combo.ops) e.push("nº de operaciones");
+    }
+    for (const v of Object.values(q.vars)) if (v === 0 || Math.abs(v) > Math.max(q.combo.max, q.combo.fmax * q.combo.fmax)) e.push("número fuera de rango");
+    return e;
+  },
+};
+
+// Diagnóstico de una respuesta numérica errónea: devuelve {tag, msg}.
+const Diagnose = {
+  sumar(q, x) {
+    const absSum = q.terms.reduce((s, t) => s + Math.abs(t), 0);
+    const pos = q.terms.filter(t => t > 0).reduce((s, t) => s + t, 0), neg = q.terms.filter(t => t < 0).reduce((s, t) => s + t, 0);
+    const pairs = Math.min(pos, -neg);
+    if (x === -q.answer && q.answer !== 0) return { tag: "signo", msg: `El tamaño es correcto, pero el signo no: hay más carga ${q.answer > 0 ? "positiva" : "negativa"}, así que el resultado es ${fmt(q.answer)}.` };
+    if (Math.abs(x) === absSum) return { tag: "anula", msg: `Has juntado todas las cargas. Las cargas opuestas se anulan por parejas: ${pairs} parejas +1/−1 desaparecen y queda ${fmt(q.answer)}.` };
+    return { tag: "calculo", msg: `Cuenta las parejas que se anulan: hay ${pos} de carga positiva y ${-neg} de negativa. Se anulan ${pairs} parejas; queda ${fmt(q.answer)}.` };
+  },
+  restar(q, x) {
+    if (x === q.a + q.b) return { tag: q.b < 0 ? "dobleNeg" : "restaOpuesto", msg: `Restar ${fmtP(q.b)} no es sumarlo: equivale a sumar su opuesto, ${fmt(-q.b)}. Por eso ${fmt(q.a)} − ${fmtP(q.b)} = ${fmt(q.a)} + ${fmtP(-q.b)} = ${fmt(q.answer)}.` };
+    if (x === q.b - q.a) return { tag: "inversion", msg: `Has calculado ${fmt(q.b)} − ${fmtP(q.a)}. El tren sale de ${fmt(q.a)} (el minuendo) y se desplaza ${fmt(-q.b)}.` };
+    if (x === -q.answer) return { tag: "signo", msg: `El desplazamiento es de ${Math.abs(q.answer - q.a)} estaciones hacia la ${-q.b > 0 ? "derecha" : "izquierda"}; el tren acaba en ${fmt(q.answer)}.` };
+    return { tag: "calculo", msg: `${fmt(q.a)} − ${fmtP(q.b)} = ${fmt(q.a)} + ${fmtP(-q.b)}. Desde ${fmt(q.a)} avanza ${Math.abs(q.b)} hacia la ${-q.b > 0 ? "derecha" : "izquierda"}: llegas a ${fmt(q.answer)}.` };
+  },
+  multiplicar(q, x) {
+    const negs = (q.a < 0) + (q.b < 0);
+    if (q.answer !== 0 && x === -q.answer) return { tag: "reglaSignos", msg: `${negs === 2 ? "Dos signos negativos invierten el giro dos veces: vuelve al sentido positivo." : "Un solo signo negativo invierte el giro: el resultado es negativo."} ${fmt(q.a)} · ${fmtP(q.b)} = ${fmt(q.answer)}.` };
+    if (sgn(x) === sgn(q.answer)) return { tag: "calculo", msg: `El signo está bien. Cuenta los grupos: ${Math.abs(q.a)} grupos de ${Math.abs(q.b)} dan ${Math.abs(q.answer)}.` };
+    return { tag: "reglaSignos", msg: `Hay ${negs} signo${negs === 1 ? "" : "s"} negativo${negs === 1 ? "" : "s"}: ${negs % 2 ? "un número impar de inversiones da resultado negativo" : "un número par de inversiones da resultado positivo"}. ${fmt(q.a)} · ${fmtP(q.b)} = ${fmt(q.answer)}.` };
+  },
+  dividir(q, x) {
+    if (x === -q.answer) return { tag: "reglaSignos", msg: `La regla de los signos es la misma que en la multiplicación: ${sgn(q.a) === sgn(q.b) ? "signos iguales dan cociente positivo" : "signos distintos dan cociente negativo"}. ${fmt(q.a)} : ${fmtP(q.b)} = ${fmt(q.answer)}.` };
+    if (sgn(x) === sgn(q.answer)) return { tag: "calculo", msg: `El signo es correcto. Reparte ${Math.abs(q.a)} en ${Math.abs(q.b)} grupos iguales: salen ${Math.abs(q.answer)} en cada uno.` };
+    return { tag: "reglaSignos", msg: `${sgn(q.a) === sgn(q.b) ? "Dividendo y divisor tienen el mismo signo: el cociente es positivo." : "Dividendo y divisor tienen distinto signo: el cociente es negativo."} El resultado es ${fmt(q.answer)}.` };
+  },
+  combinadas(q, x) {
+    // ¿Coincide con operar de izquierda a derecha sin jerarquía?
+    let cur = q.tokens.filter(t => t.t !== "(" && t.t !== ")");
+    let v = cur[0].v, ok = true;
+    for (let i = 1; i + 1 < cur.length; i += 2) {
+      const b = cur[i + 1].v, o = cur[i].t;
+      if (o === "+") v += b; else if (o === "-") v -= b; else if (o === "*") v *= b; else { if (b === 0 || v % b) { ok = false; break; } v /= b; }
+    }
+    if (ok && x === v && v !== q.answer) return { tag: "jerarquia", msg: `Has operado de izquierda a derecha. Primero se resuelven los paréntesis, después · y :, y al final + y −. El resultado es ${fmt(q.answer)}.` };
+    if (x === -q.answer) return { tag: "signo", msg: `El valor es correcto, pero el signo no. Revisa el último paso: ${stepText(q.steps[q.steps.length - 1])}.` };
+    return { tag: "calculo", msg: `Repasa los pasos: ${q.steps.map(stepText).join("; ")}.` };
+  },
+};
+function stepText(s) { return `${fmt(s.a)} ${{ "+": "+", "-": "−", "*": "·", "/": ":" }[s.op]} ${fmtP(s.b)} = ${fmt(s.result)}`; }
+
+// ═════════════════════════════════════════════ AUDIO · música procedural que sigue a la escena
+// Cada escena tiene un tema (tonalidad, modo, tempo, timbres). Las escenas actualizan cada fotograma
+// Music.mood = {height: -1..1, intensity: 0..1, under: 0..1, rewind: 0|1}: el arpegio sube o baja con la
+// altura, el filtro se cierra bajo el agua, la percusión entra con la tensión y el «rebobinado» invierte la melodía.
+const THEMES = {
+  base:     { root: 57, mode: [0, 2, 4, 7, 9], prog: [0, 5, 3, 4], bpm: 92, lead: "triangle", pad: "sine", bright: 0.55, swing: 0.1 },
+  rocas:    { root: 60, mode: [0, 2, 4, 7, 9], prog: [0, 3, 4, 0], bpm: 118, lead: "triangle", pad: "triangle", bright: 0.7, swing: 0.18 },
+  vertical: { root: 55, mode: [0, 2, 4, 5, 7, 9, 11], prog: [0, 4, 5, 3], bpm: 100, lead: "sine", pad: "sawtooth", bright: 0.5, swing: 0 },
+  lago:     { root: 62, mode: [0, 2, 4, 6, 7, 9, 11], prog: [0, 1, 0, 4], bpm: 72, lead: "sine", pad: "sine", bright: 0.4, swing: 0 },
+  globo:    { root: 65, mode: [0, 2, 4, 5, 7, 9, 11], prog: [0, 3, 4, 4], bpm: 132, lead: "triangle", pad: "triangle", bright: 0.65, swing: 0, waltz: true },
+  avion:    { root: 57, mode: [0, 2, 4, 5, 7, 9, 10], prog: [0, 6, 3, 4], bpm: 128, lead: "square", pad: "sawtooth", bright: 0.75, swing: 0 },
+  sub:      { root: 50, mode: [0, 2, 3, 5, 7, 9, 10], prog: [0, 3, 6, 4], bpm: 84, lead: "sine", pad: "sawtooth", bright: 0.3, swing: 0 },
+  tele:     { root: 64, mode: [0, 2, 4, 5, 7, 9, 11], prog: [0, 4, 3, 4], bpm: 108, lead: "triangle", pad: "sine", bright: 0.6, swing: 0.12 },
+  dron:     { root: 52, mode: [0, 2, 3, 5, 7, 8, 10], prog: [0, 5, 2, 6], bpm: 116, lead: "square", pad: "sawtooth", bright: 0.55, swing: 0 },
+  tour:     { root: 55, mode: [0, 2, 4, 5, 7, 9, 11], prog: [0, 5, 3, 4], bpm: 112, lead: "sawtooth", pad: "sawtooth", bright: 0.65, swing: 0 },
+};
+const Music = {
+  ctx: null, on: false, theme: THEMES.base, themeName: "base", step: 0, nextT: 0, timer: null,
+  mood: { height: 0, intensity: 0.3, under: 0, rewind: 0 },
+  init() {
+    if (this.ctx) return;
+    const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+    const c = this.ctx = new AC();
+    this.master = c.createGain(); this.master.gain.value = 0;
+    this.comp = c.createDynamicsCompressor();
+    this.filter = c.createBiquadFilter(); this.filter.type = "lowpass"; this.filter.frequency.value = 4000; this.filter.Q.value = 0.7;
+    // Reverberación generada (ruido con caída exponencial).
+    const len = c.sampleRate * 2.2, ir = c.createBuffer(2, len, c.sampleRate);
+    for (let ch = 0; ch < 2; ch++) { const d = ir.getChannelData(ch); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3); }
+    this.verb = c.createConvolver(); this.verb.buffer = ir;
+    this.wet = c.createGain(); this.wet.gain.value = 0.28;
+    this.bus = c.createGain(); this.bus.gain.value = 1;
+    this.bus.connect(this.filter); this.filter.connect(this.comp);
+    this.bus.connect(this.verb); this.verb.connect(this.wet); this.wet.connect(this.comp);
+    this.comp.connect(this.master); this.master.connect(c.destination);
+    this.noiseBuf = c.createBuffer(1, c.sampleRate, c.sampleRate);
+    const nd = this.noiseBuf.getChannelData(0); for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+  },
+  setEnabled(v) {
+    this.on = v;
+    if (v) { this.init(); if (!this.ctx) return; this.ctx.resume(); this.master.gain.setTargetAtTime(0.55, this.ctx.currentTime, 0.4); this.start(); }
+    else if (this.ctx) { this.master.gain.setTargetAtTime(0, this.ctx.currentTime, 0.2); this.stop(); }
+  },
+  setScene(name) {
+    if (!THEMES[name] || name === this.themeName) return;
+    this.themeName = name; this.theme = THEMES[name]; this.step = 0;
+    this.mood = { height: 0, intensity: 0.3, under: 0, rewind: 0 };
+    if (this.on && this.ctx) this.sweep();
+  },
+  start() { if (this.timer) return; this.nextT = this.ctx.currentTime + 0.1; this.timer = setInterval(() => this.schedule(), 60); },
+  stop() { clearInterval(this.timer); this.timer = null; },
+  pause(p) { if (!this.ctx) return; if (p) this.ctx.suspend(); else if (this.on) this.ctx.resume(); },
+  midi: m => 440 * Math.pow(2, (m - 69) / 12),
+  degree(d, octave = 0) { const s = this.theme.mode, n = s.length; const o = Math.floor(d / n); return this.theme.root + s[((d % n) + n) % n] + 12 * (o + octave); },
+  schedule() {
+    const c = this.ctx; if (!c || !this.on) return;
+    const th = this.theme, m = this.mood, spb = 60 / th.bpm / 2; // corcheas
+    // Filtro global: brillo del tema, más cerrado bajo el agua.
+    const cut = 300 + 7000 * th.bright * (1 - 0.75 * m.under) * (0.7 + 0.3 * m.intensity);
+    this.filter.frequency.setTargetAtTime(cut, c.currentTime, 0.3);
+    while (this.nextT < c.currentTime + 0.25) {
+      const st = this.step, beat = th.waltz ? 6 : 8, bar = Math.floor(st / (beat * 2));
+      const chordRoot = th.prog[bar % th.prog.length];
+      const t = this.nextT + ((st % 2) ? th.swing * spb : 0);
+      const pos = st % (beat * 2);
+      if (pos === 0) { // acorde de fondo
+        for (const k of [0, 2, 4]) this.tone(this.midi(this.degree(chordRoot + k, -1)), t, spb * beat * 2, th.pad, 0.045, 0.6, 1.2);
+        this.tone(this.midi(this.degree(chordRoot, -2)), t, spb * beat * 1.8, "sine", 0.12, 0.02, 0.5);
+      }
+      if (pos === beat) this.tone(this.midi(this.degree(chordRoot + 4, -2)), t, spb * beat * 0.9, "sine", 0.09, 0.02, 0.4);
+      // Arpegio: registro según la altura de la escena; al rebobinar, sentido inverso.
+      const dens = m.intensity > 0.6 ? 1 : m.intensity > 0.3 ? 2 : 4;
+      if (st % dens === 0) {
+        const seq = [0, 2, 4, 2, 4, 6, 4, 2];
+        let i = (st / dens) % seq.length; if (m.rewind) i = seq.length - 1 - i;
+        const lift = Math.round(m.height * 5);
+        const note = this.degree(chordRoot + seq[i] + lift, 0);
+        this.tone(this.midi(note), t, spb * 0.9, th.lead, 0.05 + 0.04 * m.intensity, 0.005, 0.25);
+      }
+      // Percusión con la intensidad.
+      if (m.intensity > 0.45 && pos % (th.waltz ? 6 : 4) === 0) this.kick(t);
+      if (m.intensity > 0.55 && st % 2 === 1) this.hat(t, 0.03 + 0.04 * m.intensity);
+      this.nextT += spb; this.step++;
+    }
+  },
+  tone(freq, t, dur, type, vol, att = 0.01, rel = 0.3) {
+    const c = this.ctx, o = c.createOscillator(), g = c.createGain();
+    o.type = type; o.frequency.setValueAtTime(freq, t);
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol, t + att);
+    g.gain.setTargetAtTime(0, t + Math.max(att, dur - rel), rel / 3);
+    o.connect(g); g.connect(this.bus); o.start(t); o.stop(t + dur + rel * 2);
+  },
+  kick(t) {
+    const c = this.ctx, o = c.createOscillator(), g = c.createGain();
+    o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.18);
+    g.gain.setValueAtTime(0.35, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+    o.connect(g); g.connect(this.comp); o.start(t); o.stop(t + 0.3);
+  },
+  hat(t, v) { this.noise(t, 0.05, v, 7000, "highpass"); },
+  noise(t, dur, vol, freq, type = "bandpass", q = 1) {
+    const c = this.ctx, s = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+    s.buffer = this.noiseBuf; f.type = type; f.frequency.setValueAtTime(freq, t); f.Q.value = q;
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    s.connect(f); f.connect(g); g.connect(this.bus); s.start(t); s.stop(t + dur + 0.05);
+    return f;
+  },
+  sweep() { const t = this.ctx.currentTime; const f = this.noise(t, 0.9, 0.08, 400, "bandpass", 3); f.frequency.exponentialRampToValueAtTime(4000, t + 0.8); },
+  // Efectos ligados a la animación.
+  cue(name, v = 0) {
+    if (!this.on || !this.ctx) return;
+    const t = this.ctx.currentTime, th = this.theme;
+    switch (name) {
+      case "jump": this.tone(this.midi(this.degree(4 + Math.round(v * 5), 1)), t, 0.18, "triangle", 0.12, 0.005, 0.1); break;
+      case "land": this.noise(t, 0.12, 0.12, 900); break;
+      case "splash": { const f = this.noise(t, 0.6, 0.22, 1800, "bandpass", 0.6); f.frequency.exponentialRampToValueAtTime(300, t + 0.5); break; }
+      case "bubble": this.tone(300 + Math.random() * 500, t, 0.08, "sine", 0.07, 0.002, 0.05); break;
+      case "ping": this.tone(1318, t, 0.9, "sine", 0.1, 0.003, 0.8); this.tone(1318, t + 0.25, 0.6, "sine", 0.035, 0.003, 0.5); break;
+      case "pop": this.tone(900, t, 0.06, "square", 0.06, 0.002, 0.04); this.noise(t, 0.08, 0.1, 2500); break;
+      case "thud": this.tone(90, t, 0.2, "sine", 0.25, 0.003, 0.15); break;
+      case "whoosh": { const f = this.noise(t, 0.7, 0.12, 600, "bandpass", 2); f.frequency.exponentialRampToValueAtTime(v > 0 ? 3000 : 200, t + 0.6); break; }
+      case "lever": this.tone(220, t, 0.08, "square", 0.08, 0.002, 0.05); this.tone(330, t + 0.08, 0.1, "square", 0.08, 0.002, 0.05); break;
+      case "rewind": { const o = this.ctx.createOscillator(), g = this.ctx.createGain(); o.type = "sawtooth"; o.frequency.setValueAtTime(900, t); o.frequency.exponentialRampToValueAtTime(120, t + 0.7); g.gain.setValueAtTime(0.06, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.75); o.connect(g); g.connect(this.bus); o.start(t); o.stop(t + 0.8); break; }
+      case "tick": this.tone(this.midi(this.degree(Math.round(v), 1)), t, 0.1, "triangle", 0.09, 0.002, 0.06); break;
+      case "success": [0, 2, 4, 7].forEach((d, i) => this.tone(this.midi(this.degree(d, 1)), t + i * 0.09, 0.5, th.lead === "square" ? "square" : "triangle", 0.11, 0.005, 0.4)); break;
+      case "fanfare": [0, 4, 7, 9, 11, 14].forEach((d, i) => { this.tone(this.midi(this.degree(d, 0)), t + i * 0.11, 0.9, "sawtooth", 0.06, 0.01, 0.6); this.tone(this.midi(this.degree(d, 1)), t + i * 0.11, 0.9, "triangle", 0.07, 0.01, 0.6); }); this.kick(t); this.kick(t + 0.44); break;
+      case "fail": this.tone(this.midi(this.theme.root + 3), t, 0.35, "triangle", 0.09, 0.01, 0.25); this.tone(this.midi(this.theme.root + 2), t + 0.18, 0.45, "triangle", 0.08, 0.01, 0.3); break;
+      case "hint": [0, 4, 2].forEach((d, i) => this.tone(this.midi(this.degree(d + 7, 0)), t + i * 0.12, 0.4, "sine", 0.06, 0.01, 0.35)); break;
+      case "engine": this.noise(t, 0.4, 0.05 + 0.05 * v, 180, "lowpass"); break;
+    }
+  },
+};
+
+// ═════════════════════════════════════════════ 7. ESCENAS: utilidades, partículas y modelos
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+const ease = t => t < .5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
+const easeOut = t => 1 - (1 - t) ** 3;
+const easeBack = t => { const c = 1.7; return 1 + (c + 1) * (t - 1) ** 3 + c * (t - 1) ** 2; };
+function anim(st, k, dur, data) { st.anim = { k, t0: App.now, dur: dur * App.motionScale, data }; }
+function ap(st, k) { if (!st.anim || st.anim.k !== k) return null; return clamp((App.now - st.anim.t0) / st.anim.dur, 0, 1); }
+const animDone = (st, k) => { const p = ap(st, k); return p !== null && p >= 1; };
+const wob = (t, f = 1, a = 1) => Math.sin(t * f) * a;
+// Escala vertical/horizontal: valor → coordenada.
+const scaleOf = (max, span) => v => v / max * span;
+
+// Partículas (instancias de esfera/caja en el motor).
+const Fx = {
+  list: [],
+  burst(p, col, n, o = {}) {
+    if (App.reduceMotion) n = Math.ceil(n / 4);
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, u = Math.random() * 2 - 1, sp = (o.speed ?? 3) * (0.4 + Math.random() * 0.8);
+      const r = Math.sqrt(1 - u * u);
+      this.list.push({ p: p.slice(), v: [Math.cos(a) * r * sp, Math.abs(u) * sp * (o.up ?? 1) + (o.lift ?? 0), Math.sin(a) * r * sp],
+        col, life: (o.life ?? 1) * (0.6 + Math.random() * 0.6), age: 0, g: o.g ?? 6, size: o.size ?? 0.08, geo: o.geo ?? "sph", spin: Math.random() * 6 });
+    }
+  },
+  ring(p, col, o = {}) { this.list.push({ p: p.slice(), v: [0, 0, 0], col, life: o.life ?? 1.2, age: 0, g: 0, size: o.size ?? 0.2, geo: "ring", grow: o.grow ?? 3 }); },
+  update(dt) {
+    for (const f of this.list) { f.age += dt; f.v[1] -= f.g * dt; for (let k = 0; k < 3; k++) f.p[k] += f.v[k] * dt; }
+    this.list = this.list.filter(f => f.age < f.life);
+  },
+  draw(E) {
+    for (const f of this.list) {
+      const k = 1 - f.age / f.life;
+      if (f.geo === "ring") { const r = f.size + f.grow * (1 - k); E.ring(f.p[0], f.p[1], f.p[2], r, f.col, { a: 0.6 * k, emis: 0.6 }); }
+      else if (f.geo === "box") E.box(f.p[0], f.p[1], f.p[2], f.size * 2, f.size * 2, f.size * 0.4, f.col, { emis: 0.7, ry: f.spin + f.age * 6, rx: f.age * 4 });
+      else E.sph(f.p[0], f.p[1], f.p[2], f.size * (0.4 + 0.6 * k), f.col, { emis: 0.8, a: Math.min(1, k * 1.5) });
+    }
+  },
+  clear() { this.list = []; },
+};
+const CONFETTI = [COL.amber, COL.pos, COL.neg, COL.ok, COL.hint, COL.ivory];
+function confetti(p, n = 60) { for (const c of CONFETTI) Fx.burst(p, c, n / CONFETTI.length, { speed: 6, lift: 4, g: 7, life: 2, size: 0.12, geo: "box" }); }
+
+// --- Modelos hechos con primitivas (posición local, orientación ry)
+const Models = {
+  hero(E, x, y, z, ry = 0, t = 0, run = 0, scarf = COL.amber) {
+    const bob = Math.abs(Math.sin(t * 9)) * 0.08 * run, sw = Math.sin(t * 9) * 0.6 * run;
+    const R = (dx, dz) => [x + Math.cos(ry) * dx + Math.sin(ry) * dz, z - Math.sin(ry) * dx + Math.cos(ry) * dz];
+    let [a, b] = R(-0.1, sw * 0.12); E.box(a, y + 0.25, b, 0.12, 0.5, 0.12, hex(0x24324a), { ry });
+    [a, b] = R(0.1, -sw * 0.12); E.box(a, y + 0.25, b, 0.12, 0.5, 0.12, hex(0x24324a), { ry });
+    E.box(x, y + 0.72 + bob, z, 0.4, 0.5, 0.24, hex(0x2f6fd8), { ry });
+    E.sph(x, y + 1.13 + bob, z, 0.17, hex(0xf0c39a));
+    E.cyl(x, y + 0.98 + bob, z, 0.2, 0.08, scarf, { emis: 0.25 });
+    E.sph(x, y + 1.19 + bob, z, 0.175, hex(0x3a2a1e), { a: 1 });
+    [a, b] = R(-0.27, -sw * 0.1); E.box(a, y + 0.75 + bob, b, 0.1, 0.42, 0.1, hex(0x2f6fd8), { ry, rx: sw * 0.5 });
+    [a, b] = R(0.27, sw * 0.1); E.box(a, y + 0.75 + bob, b, 0.1, 0.42, 0.1, hex(0x2f6fd8), { ry, rx: -sw * 0.5 });
+  },
+  dog(E, x, y, z, ry = 0, t = 0, happy = 0) {
+    const wag = Math.sin(t * (happy ? 20 : 5)) * (happy ? 0.8 : 0.3), hop = happy ? Math.abs(Math.sin(t * 8)) * 0.25 : 0;
+    const c = hex(0xd8a25e);
+    E.box(x, y + 0.32 + hop, z, 0.5, 0.25, 0.25, c, { ry });
+    E.sph(x + Math.cos(ry) * 0.3, y + 0.5 + hop, z - Math.sin(ry) * 0.3, 0.16, c);
+    E.box(x + Math.cos(ry) * 0.42, y + 0.47 + hop, z - Math.sin(ry) * 0.42, 0.12, 0.08, 0.1, hex(0x3a2a1e), { ry });
+    E.box(x - Math.cos(ry) * 0.3, y + 0.45 + hop, z + Math.sin(ry) * 0.3, 0.05, 0.22, 0.05, c, { ry, rz: 0.6 + wag });
+    for (const [dx, dz] of [[0.17, 0.08], [0.17, -0.08], [-0.17, 0.08], [-0.17, -0.08]]) E.box(x + dx * Math.cos(ry) + dz * Math.sin(ry), y + 0.12 + hop, z - dx * Math.sin(ry) + dz * Math.cos(ry), 0.07, 0.22, 0.07, c);
+  },
+  plane(E, x, y, z, pitch = 0, roll = 0, col = COL.ivory, t = 0, ry = Math.PI / 2) {
+    E.cyl(x, y, z, 0.22, 1.6, col, { ry, rx: Math.PI / 2 - pitch, rz: roll });
+    const fx = Math.sin(ry), fz = Math.cos(ry), cp = Math.cos(pitch), sp = Math.sin(pitch);
+    E.cone(x + fx * 0.95 * cp, y + sp * 0.95, z + fz * 0.95 * cp, 0.22, 0.35, COL.amber, { ry, rx: Math.PI / 2 - pitch });
+    // Alas a lo ancho (perpendiculares al fuselaje), cola y hélice que gira sobre el eje del avión.
+    E.box(x, y + 0.02, z, 2.4, 0.06, 0.5, col, { ry, rz: roll, rx: -pitch });
+    E.box(x - fx * 0.7 * cp, y + 0.25 - sp * 0.7, z - fz * 0.7 * cp, 0.06, 0.45, 0.3, COL.neg, { ry, rx: -pitch });
+    E.box(x - fx * 0.7 * cp, y + 0.02 - sp * 0.7, z - fz * 0.7 * cp, 0.9, 0.05, 0.25, col, { ry, rx: -pitch });
+    E.box(x + fx * 1.13 * cp, y + sp * 1.13, z + fz * 1.13 * cp, 0.06, 0.9, 0.05, hex(0x333333), { ry, rz: t * 40 });
+  },
+  sub(E, x, y, z, col = hex(0xffc233), t = 0, ry = Math.PI / 2, lights = 1) {
+    E.sph(x, y, z, 0.6, col, { ry });
+    E.cyl(x, y, z, 0.6, 1.4, col, { ry, rx: Math.PI / 2 });
+    E.sph(x + Math.sin(ry) * 0.7, y, z + Math.cos(ry) * 0.7, 0.6, col);
+    E.sph(x - Math.sin(ry) * 0.7, y, z - Math.cos(ry) * 0.7, 0.6, col);
+    E.box(x, y + 0.65, z, 0.5, 0.45, 0.35, col, { ry });
+    E.cyl(x, y + 1.0, z, 0.04, 0.4, hex(0x555555));
+    E.sph(x + Math.sin(ry) * 0.3, y + 0.05, z + Math.cos(ry) * 0.3 + 0.5, 0.14, hex(0x8fe4ff), { emis: lights * 0.8 });
+    E.sph(x - Math.sin(ry) * 0.2, y + 0.05, z - Math.cos(ry) * 0.2 + 0.5, 0.14, hex(0x8fe4ff), { emis: lights * 0.8 });
+    E.box(x - Math.sin(ry) * 1.35, y, z - Math.cos(ry) * 1.35, 0.05, 0.6, 0.05, hex(0x555555), { ry, rz: t * 20 });
+  },
+  balloon(E, x, y, z, t = 0, col = COL.neg) {
+    const s = Math.sin(t * 1.2) * 0.04;
+    E.sph(x, y + 2.3, z, 1.25, col, { a: 1 });
+    for (let i = 0; i < 8; i++) { const a = i / 8 * Math.PI * 2; E.box(x + Math.cos(a) * 1.0, y + 2.3, z + Math.sin(a) * 1.0, 0.08, 2.0, 0.08, i % 2 ? COL.amber : COL.ivory, { ry: -a, rz: 0.15 + s }); }
+    E.cone(x, y + 0.9, z, 0.6, 0.7, col, { rx: Math.PI });
+    for (const [dx, dz] of [[.3, .3], [-.3, .3], [.3, -.3], [-.3, -.3]]) E.beam([x + dx * 0.9, y + 0.4, z + dz * 0.9], [x + dx * 1.4, y + 1.1, z + dz * 1.4], 0.015, hex(0x553f2a));
+    E.box(x, y + 0.15, z, 0.75, 0.5, 0.75, COL.wood);
+    E.cone(x, y + 0.75, z, 0.12, 0.3, COL.amber, { emis: 0.9 + Math.sin(t * 20) * 0.1 });
+  },
+  lantern(E, x, y, z, t = 0, col = COL.amber, a = 1) {
+    const sw = Math.sin(t * 2) * 0.1;
+    E.cyl(x, y, z, 0.35, 0.6, col, { emis: 0.85, a, rz: sw });
+    E.cyl(x, y + 0.36, z, 0.25, 0.12, hex(0x7a3b20), { a, rz: sw });
+    E.cyl(x, y - 0.36, z, 0.25, 0.12, hex(0x7a3b20), { a, rz: sw });
+    E.box(x + 0.45, y + 0.1, z, 0.5, 0.05, 0.2, col, { emis: 0.6, a, rz: 0.4 + Math.sin(t * 6) * 0.5 });
+    E.box(x - 0.45, y + 0.1, z, 0.5, 0.05, 0.2, col, { emis: 0.6, a, rz: -0.4 - Math.sin(t * 6) * 0.5 });
+  },
+  bird(E, x, y, z, t = 0) {
+    const f = Math.sin(t * 10) * 0.6;
+    E.sph(x, y, z, 0.18, COL.ivory); E.cone(x + 0.22, y, z, 0.06, 0.15, COL.amber, { rz: -Math.PI / 2 });
+    E.box(x, y + 0.05, z + 0.25, 0.25, 0.03, 0.4, COL.ivory, { rx: f }); E.box(x, y + 0.05, z - 0.25, 0.25, 0.03, 0.4, COL.ivory, { rx: -f });
+  },
+  diver(E, x, y, z, t = 0) {
+    E.box(x, y, z, 0.9, 0.26, 0.3, hex(0x1c1c1c), { rz: 0.1 * Math.sin(t) });
+    E.sph(x + 0.55, y + 0.05, z, 0.17, hex(0x1c1c1c)); E.sph(x + 0.62, y + 0.08, z + 0.1, 0.09, COL.pos, { emis: 0.5 });
+    E.cyl(x, y + 0.2, z, 0.1, 0.5, COL.amber, { rz: Math.PI / 2 });
+    E.box(x - 0.55, y, z, 0.35, 0.05, 0.35, COL.amber, { rz: Math.sin(t * 6) * 0.4 });
+  },
+  fish(E, x, y, z, t = 0, col = COL.neg) {
+    E.sph(x, y, z, 0.3, col, { emis: 0.2 }); E.cone(x - 0.35, y, z, 0.2, 0.3, col, { rz: Math.PI / 2, ry: Math.sin(t * 8) * 0.4 });
+    E.sph(x + 0.18, y + 0.06, z + 0.12, 0.05, hex(0x111111));
+  },
+  buoy(E, x, y, z, t = 0) {
+    const b = Math.sin(t * 2) * 0.06;
+    E.cyl(x, y + 0.2 + b, z, 0.35, 0.5, COL.neg); E.cyl(x, y + 0.5 + b, z, 0.36, 0.12, COL.ivory);
+    E.cone(x, y + 0.85 + b, z, 0.2, 0.5, COL.neg); E.sph(x, y + 1.15 + b, z, 0.09, COL.amber, { emis: 0.5 + 0.5 * Math.sin(t * 4) });
+  },
+  cabin(E, x, y, z, col = COL.neg, t = 0) {
+    E.box(x, y, z, 0.9, 0.8, 0.7, col); E.box(x, y + 0.1, z, 0.92, 0.32, 0.72, hex(0x9fdcff), { emis: 0.35 });
+    E.box(x, y + 0.48, z, 1.0, 0.1, 0.8, hex(0x333333)); E.beam([x, y + 0.5, z], [x, y + 1.2, z], 0.03, hex(0x777777));
+  },
+  drone(E, x, y, z, t = 0, tilt = 0) {
+    E.box(x, y, z, 0.7, 0.18, 0.7, hex(0x30343a), { rz: tilt });
+    E.sph(x, y - 0.05, z + 0.38, 0.1, COL.pos, { emis: 0.9 });
+    for (const [dx, dz] of [[.5, .5], [-.5, .5], [.5, -.5], [-.5, -.5]]) {
+      E.beam([x, y, z], [x + dx, y + 0.05, z + dz], 0.04, hex(0x30343a));
+      E.cyl(x + dx, y + 0.12, z + dz, 0.32, 0.02, hex(0xc9d3d8), { a: 0.45, ry: t * 50 });
+      E.sph(x + dx, y + 0.08, z + dz, 0.06, COL.amber, { emis: 0.8 });
+    }
+  },
+};
+
+// Entornos reutilizables.
+const Env = {
+  water(E, t, w = 60, d = 30, y = 0, col = hex(0x1d6f86), a = 0.55) {
+    E.box(0, y - 0.05, 0, w, 0.1, d, col, { a, emis: 0.05 });
+    if (App.reduceMotion) return;
+    for (let i = 0; i < 26; i++) {
+      const x = ((i * 7.3 + t * 0.6) % w) - w / 2, z = ((i * 3.7) % d) - d / 2;
+      E.box(x, y + 0.01, z, 1.4, 0.02, 0.06, hex(0x9fe6ff), { a: 0.25 + 0.15 * Math.sin(t * 2 + i), emis: 0.5 });
+    }
+  },
+  // Mar visto en corte (como un acuario): el volumen queda detrás de la acción y la superficie es una línea.
+  sea(E, t, depth, col = hex(0x135a74), w = 90) {
+    E.box(0, -depth / 2, -11, w, depth, 20, col, { a: 0.92 });
+    E.box(0, -depth / 2, -0.9, w, depth, 0.05, lerp3(col, COL.white, 0.15), { a: 0.18, emis: 0.2 });
+    E.box(0, -0.03, -6, w, 0.06, 12, hex(0x6fd3ee), { a: 0.45, emis: 0.4 });
+    if (App.reduceMotion) return;
+    for (let i = 0; i < 40; i++) {
+      const x = ((i * 4.7 + t * 1.2) % w) - w / 2;
+      E.box(x, 0.02 + Math.sin(t * 2 + i) * 0.04, -1 - (i % 5) * 2, 1.6, 0.05, 0.12, hex(0xbff3ff), { a: 0.5, emis: 0.7 });
+    }
+    for (let i = 0; i < 18; i++) {
+      const yy = -((i * 1.9 + t * 0.6) % depth);
+      E.box(-30 + i * 3.4 + Math.sin(t + i) * 0.5, yy, -3 - (i % 4), 0.06, 0.6 + (i % 3) * 0.4, 0.02, hex(0x9fe6ff), { a: 0.25, emis: 0.5 });
+    }
+  },
+  clouds(E, t, n = 8, y0 = 6, spread = 40, z = -6, speed = 0.6) {
+    for (let i = 0; i < n; i++) {
+      const x = ((i * 13.1 + t * speed) % spread) - spread / 2, y = y0 + (i % 3) * 1.6, zz = z - (i % 4) * 1.5;
+      for (let k = 0; k < 4; k++) E.sph(x + k * 0.7, y + Math.sin(k * 2) * 0.25, zz, 0.6 + (k % 2) * 0.25, hex(0xe8f1f5), { a: 0.85 });
+    }
+  },
+  stars(E, t, n = 70, R = 70) {
+    for (let i = 0; i < n; i++) {
+      const a = i * 2.399, b = (i * 0.618) % 1, x = Math.cos(a) * R, z = Math.sin(a) * R - 20, y = 12 + b * 40;
+      E.sph(x, y, z, 0.12 + (i % 3) * 0.05, COL.ivory, { emis: 0.6 + 0.4 * Math.sin(t * 2 + i) });
+    }
+  },
+  // Columna graduada vertical (altímetro) en x, de -max a +max.
+  gauge(E, x, z, max, span, step, tag, labelEvery = 1, hl = null) {
+    E.box(x, 0, z, 0.12, span * 2 + 0.4, 0.12, COL.steel);
+    const n = Math.round(max / step);
+    for (let k = -n; k <= n; k++) {
+      const v = k * step, y = v / max * span;
+      const major = k % labelEvery === 0 || v === 0;
+      E.box(x + (major ? 0.22 : 0.12), y, z, major ? 0.45 : 0.25, 0.04, 0.05, v === 0 ? COL.zero : signCol(v), { emis: 0.4 });
+      if (major) Labels.put(tag + v, fmt(v), [x - 0.55, y, z], "small " + signCls(v) + (hl === v ? " goal" : ""));
+    }
+  },
+};
+// Etiquetas que conviene mostrar en una recta con muchas marcas.
+function labelStride(n) { return n <= 21 ? 1 : n <= 31 ? 2 : 5; }
+
+// ═════════════════════════════════════════════ 5. REGISTRO DE AVENTURAS
+const EX = {};
+
+// ───────────────────────────── 1. SALTARROCAS · situar enteros en la recta
+EX.rocas = {
+  id: "rocas", name: "Saltarrocas", skill: "Situar enteros en la recta", icon: "⟷", tint: "#3fd6e8", music: "rocas", fog: 0x10283a,
+  blurb: "Un perrito se ha quedado atrapado en una roca del río. Cada roca lleva un número: salta en el orden indicado y llega hasta él.",
+  level: L => { const d = D(L); return `Nivel ${L}: ${d.count} saltos a números entre −${d.max} y +${d.max}${d.step > 1 ? `, múltiplos de ${d.step} (una roca cada ${d.step})` : ""}${L >= 3 ? "; el cero puede aparecer" : ""}${L >= 7 ? "; destinos muy próximos entre sí" : ""}.`; },
+  make: (rng, L) => MathModel.situar(rng, L),
+  validate: q => Validate.situar(q),
+  init(q) { return { i: 0, cur: 0, at: 0, from: 0, path: [], fails: 0 }; },
+  sx(q) { const n = q.ticks.length; return Math.min(1.4, 30 / (n - 1)); },
+  xOf(q, v) { return v / q.step * this.sx(q); },
+  ui(q, st, A) {
+    A.ctl.append(A.p(`Toca una roca (o muévete con ← →) y pulsa «Comprobar» para saltar.`));
+    const chips = A.h("div", { class: "chips", role: "list", "aria-label": "Orden de los saltos" });
+    q.values.forEach((v, k) => chips.append(A.h("span", { class: `chip ${signCls(v)}${k < st.i ? " done" : ""}`, role: "listitem", "aria-current": k === st.i ? "step" : null }, `${k + 1}º ${fmt(v)}`)));
+    A.ctl.append(chips);
+    const row = A.h("div", { class: "row" });
+    row.append(A.btn("◀ Roca", () => this.move(q, st, -1, A), "Mover la selección a la roca de la izquierda"),
+      A.h("span", { class: "num", style: "font-size:22px;min-width:70px;text-align:center", "aria-live": "polite" }, `${fmt(st.cur)}`),
+      A.btn("Roca ▶", () => this.move(q, st, 1, A), "Mover la selección a la roca de la derecha"));
+    A.ctl.append(row);
+  },
+  move(q, st, d, A) { st.cur = clamp(st.cur + d * q.step, q.min, q.max); Music.cue("tick", st.cur / q.max * 3); A.refresh(); },
+  key(q, st, e, A) { if (e.key === "ArrowLeft") { this.move(q, st, -1, A); return true; } if (e.key === "ArrowRight") { this.move(q, st, 1, A); return true; } return false; },
+  pick(q, st, id, A) { if (id?.startsWith("rock:")) { st.cur = +id.slice(5); Music.cue("tick", st.cur / q.max * 3); A.refresh(); } },
+  check(q, st) {
+    if (st.anim && !animDone(st, st.anim.k)) return { notReady: true, msg: "Espera a que termine el salto." };
+    const target = q.values[st.i], x = st.cur;
+    st.from = st.at; anim(st, "jump", 0.75, { to: x, ok: x === target });
+    Music.cue("jump", x / q.max);
+    if (x === target) {
+      st.at = x; st.path.push(x); st.i++;
+      setTimeout(() => Music.cue("land"), 700 * App.motionScale);
+      if (st.i >= q.values.length) return { ok: true, msg: `¡Rescate completado! Has pisado ${q.values.map(fmt).join(", ")}: ${this.reason(q)}` };
+      return { partial: true, msg: `Bien: ${fmt(x)} ${x > 0 ? "está a la derecha del cero (positivo)" : x < 0 ? "está a la izquierda del cero (negativo)" : "es el cero, ni positivo ni negativo"}. Siguiente salto: ${fmt(q.values[st.i])}.` };
+    }
+    setTimeout(() => { Music.cue("splash"); Fx.burst([this.xOf(q, x), 0.2, 0], hex(0x9fe6ff), 30, { speed: 4, lift: 3 }); Fx.ring([this.xOf(q, x), 0.02, 0], hex(0x9fe6ff)); }, 650 * App.motionScale);
+    if (x === -target) return { ok: false, tag: "signo", msg: `Has saltado a ${fmt(x)}, el opuesto. ${fmt(target)} es ${target > 0 ? "positivo: está a la derecha" : "negativo: está a la izquierda"} del cero, a ${Math.abs(target)} de distancia.` };
+    const dir = target > x ? "derecha" : "izquierda";
+    const tag = (x < 0 && target < 0 && Math.abs(x) < Math.abs(target)) || (x < 0 && target < 0) ? "absoluto" : "colocacion";
+    return { ok: false, tag, msg: `Esa roca es ${fmt(x)}. ${fmt(target)} está más a la ${dir}: ${target < x ? `${fmt(target)} es menor que ${fmt(x)}` : `${fmt(target)} es mayor que ${fmt(x)}`} porque está más a la ${dir} en la recta.` };
+  },
+  reason: q => `los positivos quedan a la derecha del cero y los negativos a la izquierda; cuanto más a la izquierda, menor es el número.`,
+  hint(q, st, n) { st.hl = n; Music.cue("hint"); const t = q.values[st.i];
+    return n === 1 ? `Busca la roca blanca con el rombo ◇: es el cero. ${t > 0 ? "Los positivos están a su derecha" : t < 0 ? "Los negativos están a su izquierda" : "Tu destino es justo ese"}.`
+      : `${fmt(t)} está a ${Math.abs(t)} unidades del cero hacia la ${t > 0 ? "derecha" : "izquierda"}${q.step > 1 ? ` (${Math.abs(t) / q.step} rocas)` : ""}. La roca brilla en violeta.`; },
+  demo(q, st) { st.demoQ = q.values.slice(st.i); st.demoT = App.now; st.cur = st.demoQ[0] ?? st.cur; },
+  draw(E, t, dt, q, st) {
+    const sx = this.sx(q), W = (q.ticks.length - 1) * sx + 8;
+    Env.stars(E, t);
+    E.box(0, -0.6, -7, W + 20, 1, 6, hex(0x2c5136)); E.box(0, -0.6, 7, W + 20, 1, 6, hex(0x2c5136));
+    for (let i = 0; i < 14; i++) { const x = -W / 2 - 6 + i * (W + 12) / 13; E.cone(x, 1.4, -8 - (i % 3), 1.1, 3, hex(0x1f4a33)); E.cyl(x, 0, -8 - (i % 3), 0.15, 0.8, COL.wood); }
+    Env.water(E, t, W + 20, 8, 0, hex(0x17607a), 0.7);
+    // Demo: salta solo por las rocas que faltan.
+    if (st.demoQ && st.demoQ.length && (!st.anim || animDone(st, st.anim.k))) {
+      const v = st.demoQ.shift(); st.from = st.at; st.at = v; st.cur = v; st.path.push(v); st.i = Math.min(q.values.length, st.i + 1);
+      anim(st, "jump", 0.75, { to: v, ok: true }); Music.cue("jump", v / q.max);
+    }
+    const stride = labelStride(q.ticks.length);
+    q.ticks.forEach((v, k) => {
+      const x = v / q.step * sx, isT = st.hl === 2 && v === q.values[st.i], sel = v === st.cur;
+      const sink = st.anim?.k === "jump" && !st.anim.data.ok && st.anim.data.to === v ? Math.sin(ap(st, "jump") * Math.PI) * 0.25 : 0;
+      const base = v === 0 ? COL.zero : lerp3(hex(0x6c6f73), signCol(v), 0.25);
+      E.cyl(x, 0.05 - sink, 0, 0.42 * sx, 0.35, base, { emis: isT ? 0.6 : 0 });
+      if (v === 0) E.box(x, 0.3, 0, 0.25, 0.25, 0.25, COL.zero, { ry: t, rz: Math.PI / 4, emis: st.hl === 1 ? 0.9 : 0.3 });
+      if (isT) E.cyl(x, 0.25, 0, 0.5 * sx, 0.04, COL.hint, { emis: 1, a: 0.6 + 0.4 * Math.sin(t * 6) });
+      if (sel) E.ring(x, 0.25, 0, 0.9 * sx, COL.amber, { emis: 1, a: 0.85 });
+      E.pick("rock:" + v, [x, 0.1, 0], Math.max(0.45, 0.5 * sx));
+      if (k % stride === 0 || v === 0 || sel || isT) Labels.put("rk" + v, fmt(v), [x, 0.45, 0.9], (sel ? "goal " : "") + signCls(v) + (q.ticks.length > 25 ? " small" : ""));
+    });
+    if (st.hl === 1) { for (const s of [-1, 1]) for (let k = 1; k <= 3; k++) E.cone(s * k * 2.2, 1.6, 0, 0.22, 0.5, s > 0 ? COL.pos : COL.neg, { rz: -s * Math.PI / 2, emis: 0.7 }); }
+    // Perrito en la última roca.
+    const last = q.values[q.values.length - 1], dx = last / q.step * sx, saved = st.i >= q.values.length && animDone(st, "jump");
+    if (!saved) Models.dog(E, dx, 0.22, 0, Math.PI, t);
+    // Héroe saltando.
+    let hx = st.at / q.step * sx, hy = 0.22;
+    const p = ap(st, "jump");
+    if (p !== null && p < 1) {
+      const a = st.from / q.step * sx, b = st.anim.data.to / q.step * sx, ok = st.anim.data.ok;
+      const pp = ok ? p : Math.min(p * 1.6, 1);
+      hx = lerp(a, b, ease(ok ? p : (p < 0.62 ? p / 0.62 : 1 - (p - 0.62) / 0.38)));
+      hy = 0.22 + Math.sin((ok ? p : Math.min(1, p / 0.62)) * Math.PI) * (1.2 + Math.abs(b - a) * 0.15) - (!ok && p > 0.62 ? 0.6 * Math.sin((p - 0.62) / 0.38 * Math.PI) : 0);
+      Music.mood.height = clamp(hy / 3, 0, 1);
+      if (!ok && pp >= 1 && p > 0.62) hy = Math.max(hy, -0.3);
+    } else Music.mood.height = st.at / q.max * 0.5;
+    Music.mood.intensity = 0.3 + 0.1 * st.i;
+    const facing = (st.anim?.data?.to ?? st.at) >= hx ? Math.PI / 2 : -Math.PI / 2;
+    Models.hero(E, hx, hy, 0, facing, t, p !== null && p < 1 ? 1 : 0);
+    if (saved) {
+      Models.dog(E, hx + 0.6, 0.22, 0.3, -Math.PI / 2, t, 1);
+      if (!st.party) { st.party = 1; confetti([hx, 2, 0], 80); Music.cue("fanfare"); }
+    }
+    st.heroX = hx;
+  },
+  cam(q, st) { const sx = this.sx(q), w = (q.ticks.length - 1) * sx; const fx = clamp((st.heroX ?? 0) * 0.35, -w / 3, w / 3);
+    const dist = Math.max(10, w * 0.62); return [[fx, dist * 0.55, dist * 0.8], [fx, 0, 0]]; },
+  diorama(E, t) { for (let i = -2; i <= 2; i++) E.cyl(i * 1.1, 0.1, 0, 0.4, 0.3, i ? lerp3(hex(0x6c6f73), signCol(i), .3) : COL.zero); Env.water(E, t, 6, 2.4, 0.02); Models.hero(E, -1.1 + ((t * 0.8) % 2.2), 0.3 + Math.abs(Math.sin(t * 2.85)) * 0.6, 0, Math.PI / 2, t, 1); Models.dog(E, 2.2, 0.25, 0, Math.PI, t); },
+};
+function lerp3(a, b, t) { return [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)]; }
+
+// ───────────────────────────── 2. EXPEDICIÓN VERTICAL · comparar y ordenar
+EX.vertical = {
+  id: "vertical", name: "Expedición vertical", skill: "Comparar y ordenar", icon: "⇅", tint: "#ffb53d", music: "vertical", fog: 0x14324a,
+  blurb: "Avionetas, gaviotas, buzos y submarinos esperan en el muelle. Ordénalos de la cota más baja a la más alta y míralos salir disparados a su sitio.",
+  level: L => { const d = D(L); return `Nivel ${L}: ordenar ${Math.min(6, d.count + 1)} cotas entre −${d.max} y +${d.max} m${L >= 3 ? ", con trampas como −8 y −3 o 7 y −7" : ""}${L >= 6 ? "; cotas próximas entre sí" : ""}.`; },
+  make: (rng, L) => MathModel.ordenar(rng, L),
+  validate: q => Validate.ordenar(q),
+  init(q) { return { order: [], launched: false }; },
+  kindOf(v, k) { return v > 0 ? ["avion", "bird", "balloon"][k % 3] : v < 0 ? ["sub", "diver", "fish"][k % 3] : "buoy"; },
+  ui(q, st, A) {
+    A.ctl.append(A.p("Toca los viajeros de la cota más baja a la más alta (también con estos botones)."));
+    const chips = A.h("div", { class: "chips" });
+    q.values.forEach((v, k) => {
+      const ord = st.order.indexOf(k);
+      chips.append(A.h("button", { type: "button", class: `chip ${signCls(v)}`, "aria-pressed": ord >= 0 ? "true" : "false",
+        onclick: () => this.toggle(q, st, k, A) }, `${fmt(v)} m`, ord >= 0 ? A.h("span", { class: "ord" }, `${ord + 1}º`) : ""));
+    });
+    A.ctl.append(chips);
+    A.ctl.append(A.h("div", { class: "row" }, A.btn("Deshacer último", () => { st.order.pop(); st.launched = false; A.refresh(); }), A.h("span", { class: "num" }, st.order.map(k => fmt(q.values[k])).join(" < "))));
+  },
+  toggle(q, st, k, A) { if (st.launched) { st.launched = false; st.order = []; } const i = st.order.indexOf(k); if (i >= 0) st.order.splice(i, 1); else st.order.push(k); Music.cue("tick", st.order.length); A.refresh(); },
+  pick(q, st, id, A) { if (id?.startsWith("trav:")) this.toggle(q, st, +id.slice(5), A); },
+  check(q, st) {
+    if (st.order.length < q.values.length) return { notReady: true, msg: `Te faltan ${q.values.length - st.order.length} viajeros por ordenar.` };
+    st.launched = true; anim(st, "launch", 2.2); Music.cue("whoosh", 1);
+    const got = st.order.map(k => q.values[k]);
+    if (got.join() === q.answer.join()) return { ok: true, msg: `Correcto: ${q.answer.map(fmt).join(" < ")}. Cuanto más abajo está la cota, menor es el número: los negativos son profundidades.` };
+    const byAbs = q.values.slice().sort((a, b) => Math.abs(a) - Math.abs(b) || a - b);
+    const i = got.findIndex((v, k) => v !== q.answer[k]);
+    const a = got[i], b = q.answer[i];
+    if (got.join() === byAbs.join() || (a < 0 && b < 0)) return { ok: false, tag: "absoluto", msg: `Fíjate en ${fmt(Math.min(a, b))} y ${fmt(Math.max(a, b))}: ${fmt(Math.min(a, b))} está más hondo, así que es menor. No compares las distancias al cero, compara las cotas.` };
+    return { ok: false, tag: "colocacion", msg: `En el puesto ${i + 1}º va ${fmt(b)}, no ${fmt(a)}: ${fmt(b)} < ${fmt(a)} porque ${fmt(b)} queda más abajo.` };
+  },
+  hint(q, st, n) { st.hl = n; Music.cue("hint");
+    return n === 1 ? "La superficie del mar es la cota cero. Los negativos están bajo el agua: cuanto más profundo, menor." : `El primero de la fila (el menor) es ${fmt(q.answer[0])}. Brilla en violeta.`; },
+  demo(q, st) { st.order = q.answer.map(v => q.values.indexOf(v)); st.launched = true; anim(st, "launch", 2.6); Music.cue("whoosh", 1); },
+  draw(E, t, dt, q, st) {
+    const span = 7, y = v => v / q.max * span, n = q.values.length;
+    Env.stars(E, t, 40);
+    Env.sea(E, t, span + 1.5);
+    E.box(0, -span - 1.2, -5, 60, 0.4, 14, hex(0x2c3b40));
+    Env.clouds(E, t, 6, span * 0.6, 40, -8, 0.4);
+    for (let i = 0; i < 12; i++) E.box(-14 + i * 2.5, -span - 0.5 + Math.sin(i) * 0.4, -3, 2.4, 1, 6, hex(0x2c3b40));
+    E.box(-1, 0.3, 2.5, n * 2.2 + 2, 0.2, 1.4, COL.wood);
+    Env.gauge(E, -n * 1.1 - 3.5, 0, q.max, span, niceStep(q.max), "vg", 2, null);
+    if (st.hl === 1) E.box(0, 0.02, 0, 40, 0.05, 30, COL.zero, { a: 0.25 + 0.2 * Math.sin(t * 4), emis: 1 });
+    const p = ap(st, "launch");
+    Music.mood.intensity = p !== null && p < 1 ? 0.8 : 0.3;
+    q.values.forEach((v, k) => {
+      const ord = st.order.indexOf(k);
+      const slot = st.launched ? ord : k;
+      const x0 = -n * 1.1 + 1.1 + k * 2.2, x1 = -n * 1.1 + 1.1 + slot * 2.2;
+      let px = x0, py = 0.9, pz = 2.5;
+      if (st.launched && p !== null) {
+        const pk = clamp((p - k * 0.06) / 0.7, 0, 1), e = easeBack(pk);
+        px = lerp(x0, x1, ease(pk)); py = lerp(0.9, y(v), e); pz = lerp(2.5, 0, ease(pk));
+        if (pk > 0 && pk < 1 && Math.random() < 0.3) Fx.burst([px, py, pz], v >= 0 ? COL.ivory : hex(0x9fe6ff), 1, { speed: 0.5, g: v < 0 ? -2 : 1, life: 0.6, size: 0.1 });
+        if (pk > 0.2 && !st["splash" + k] && v < 0) { st["splash" + k] = 1; Fx.ring([px, 0.02, pz], hex(0x9fe6ff)); Music.cue("splash"); }
+      }
+      const kind = this.kindOf(v, k);
+      if (kind === "avion") Models.plane(E, px, py, pz, 0, Math.sin(t) * 0.1, COL.ivory, t);
+      else if (kind === "bird") Models.bird(E, px, py, pz, t);
+      else if (kind === "balloon") { E.sph(px, py + 0.4, pz, 0.45, COL.pos); E.box(px, py - 0.2, pz, 0.25, 0.2, 0.25, COL.wood); }
+      else if (kind === "sub") Models.sub(E, px, py, pz, hex(0xffc233), t, Math.PI / 2);
+      else if (kind === "diver") Models.diver(E, px, py, pz, t);
+      else if (kind === "fish") Models.fish(E, px, py, pz, t);
+      else Models.buoy(E, px, py - 0.3, pz, t);
+      const isMin = st.hl === 2 && v === q.answer[0];
+      E.pick("trav:" + k, [px, py, pz], 0.9);
+      const wrong = st.launched && p >= 1 && q.answer[ord] !== v;
+      Labels.put("tv" + k, `${fmt(v)} m${ord >= 0 ? ` · ${ord + 1}º` : ""}`, [px, py + 1.1, pz], (isMin ? "hint" : wrong ? "neg" : st.launched && p >= 1 ? "ok" : signCls(v)));
+    });
+  },
+  cam(q, st) { const n = q.values.length; return [[0, 1, 13 + n * 0.6], [0, 0, 0]]; },
+  diorama(E, t) { E.box(0, 0.6, 0, 3.6, 1.2, 0.2, hex(0x1f7a9a), { a: 0.6 }); Models.plane(E, -1, 2.6 + Math.sin(t) * 0.3, 0, 0, 0, COL.ivory, t); Models.sub(E, 1, -0.2 + Math.sin(t * 0.7) * 0.2, 0, hex(0xffc233), t); Models.buoy(E, 0, 1.15, 0, t); },
+};
+function niceStep(max) { return max <= 10 ? 1 : max <= 20 ? 2 : max <= 50 ? 5 : max <= 100 ? 10 : max <= 250 ? 25 : 50; }
+
+// ───────────────────────────── 3. EL LAGO ESPEJO · opuesto y valor absoluto
+EX.lago = {
+  id: "lago", name: "El lago espejo", skill: "Opuesto y valor absoluto", icon: "◇", tint: "#e6e1d3", music: "lago", fog: 0x0b1830,
+  blurb: "Un farolillo flota sobre un lago en calma. Su reflejo es el opuesto; el hilo que lo une con el agua mide el valor absoluto.",
+  level: L => { const d = D(L); return `Nivel ${L}: números entre −${d.max} y +${d.max}. ${L <= 3 ? "Opuesto y valor absoluto." : L <= 5 ? "Opuesto, valor absoluto y «¿qué números tienen valor absoluto k?»." : "Además, comparar expresiones como |−7| y −(−5)."}`; },
+  make: (rng, L) => MathModel.espejos(rng, L),
+  validate: q => Validate.espejos(q),
+  init(q) { return { rel: null, reveal: false }; },
+  ui(q, st, A) {
+    if (q.sub === "opabs") {
+      A.ctl.append(A.num("Opuesto de " + fmt(q.n), "inOpp"), A.num("Valor absoluto |" + fmt(q.n) + "|", "inAbs"));
+    } else if (q.sub === "absk") {
+      A.ctl.append(A.p(`El hilo mide ${q.k}. ¿A qué alturas puede estar el farolillo?`), A.num("Un número", "inK1"), A.num("El otro", "inK2"));
+    } else {
+      A.ctl.append(A.p("Elige el símbolo correcto:"));
+      const g = A.h("div", { class: "chips", role: "radiogroup", "aria-label": "Relación" });
+      for (const r of ["<", "=", ">"]) g.append(A.h("button", { type: "button", class: "chip", role: "radio", "aria-checked": st.rel === r ? "true" : "false", "aria-pressed": st.rel === r ? "true" : "false",
+        onclick: () => { st.rel = r; Music.cue("tick", r === "<" ? -2 : r === ">" ? 2 : 0); A.refresh(); } }, r));
+      A.ctl.append(g);
+    }
+  },
+  check(q, st, A) {
+    if (q.sub === "opabs") {
+      const o = parseIntLoose(A.val("inOpp")), a = parseIntLoose(A.val("inAbs"));
+      if (o === null || a === null) return { notReady: true, msg: "Escribe dos números enteros (puedes usar el signo −)." };
+      st.reveal = true; anim(st, "mirror", 2.2); Music.cue("whoosh", -1);
+      if (o === -q.n && a === Math.abs(q.n)) return { ok: true, msg: `El reflejo de ${fmt(q.n)} está al otro lado del agua, a la misma distancia: ${fmt(-q.n)}. El hilo mide ${Math.abs(q.n)}; el valor absoluto es una distancia, nunca negativa.` };
+      if (a < 0) return { ok: false, tag: "absneg", msg: `El valor absoluto es la longitud del hilo hasta el agua: una distancia, así que nunca es negativo. |${fmt(q.n)}| = ${Math.abs(q.n)}.` };
+      if (o === Math.abs(q.n) && q.n > 0 || o === q.n) return { ok: false, tag: "opuesto", msg: `El opuesto cambia de lado: el reflejo de ${fmt(q.n)} queda ${q.n > 0 ? "bajo" : "sobre"} el agua, en ${fmt(-q.n)}.` };
+      if (o !== -q.n) return { ok: false, tag: "signo", msg: `El opuesto de ${fmt(q.n)} es ${fmt(-q.n)}: misma distancia al cero, al otro lado.` };
+      return { ok: false, tag: "calculo", msg: `El hilo mide la distancia desde ${fmt(q.n)} hasta el agua: ${Math.abs(q.n)}.` };
+    }
+    if (q.sub === "absk") {
+      const a = parseIntLoose(A.val("inK1")), b = parseIntLoose(A.val("inK2"));
+      if (a === null || b === null) return { notReady: true, msg: "Escribe los dos números." };
+      st.reveal = true; anim(st, "mirror", 2.2); Music.cue("whoosh", 1);
+      if ((a === q.k && b === -q.k) || (a === -q.k && b === q.k)) return { ok: true, msg: `${fmt(q.k)} y ${fmt(-q.k)}: los dos están a ${q.k} del cero, uno sobre el agua y su reflejo debajo.` };
+      if (a === b) return { ok: false, tag: "opuesto", msg: `Hay dos posiciones con el hilo de ${q.k}: una sobre el agua y otra bajo ella (su opuesto).` };
+      return { ok: false, tag: a < 0 && b < 0 || a > 0 && b > 0 ? "signo" : "calculo", msg: `Los números con valor absoluto ${q.k} están a ${q.k} del cero: ${fmt(q.k)} y ${fmt(-q.k)}.` };
+    }
+    if (!st.rel) return { notReady: true, msg: "Elige <, = o >." };
+    st.reveal = true; anim(st, "mirror", 2.2); Music.cue("whoosh", 1);
+    if (st.rel === q.answer.rel) return { ok: true, msg: `${q.e1} vale ${fmt(q.v1)} y ${q.e2} vale ${fmt(q.v2)}; por eso ${q.e1} ${q.answer.rel} ${q.e2}.` };
+    const naive = Math.abs(q.v1) < Math.abs(q.v2) ? "<" : Math.abs(q.v1) > Math.abs(q.v2) ? ">" : "=";
+    return { ok: false, tag: st.rel === naive ? "absoluto" : "comparar", msg: `Calcula cada lado: ${q.e1} = ${fmt(q.v1)} y ${q.e2} = ${fmt(q.v2)}. Gana el que está más alto, no el más lejano al agua: ${q.e1} ${q.answer.rel} ${q.e2}.` };
+  },
+  hint(q, st, n) { st.hl = n; Music.cue("hint");
+    if (q.sub === "cmp") return n === 1 ? "Calcula primero cada expresión. |x| es una distancia (positiva); −(x) es el reflejo de x." : `${q.e1} = ${fmt(q.v1)}. Ahora calcula ${q.e2}.`;
+    if (q.sub === "absk") return n === 1 ? "El hilo puede colgar hacia arriba o hacia abajo desde el agua." : `Uno de ellos es ${fmt(q.k)}. El otro es su reflejo.`;
+    return n === 1 ? "La superficie del lago es el cero. El reflejo está a la misma distancia, al otro lado." : `El hilo mide ${Math.abs(q.n)}. El reflejo está a ${Math.abs(q.n)} ${q.n > 0 ? "bajo" : "sobre"} el agua.`; },
+  demo(q, st) { st.reveal = true; anim(st, "mirror", 2.6); Music.cue("whoosh", 1); },
+  draw(E, t, dt, q, st) {
+    const span = 6, M = q.max, y = v => v / M * span;
+    Env.stars(E, t, 90);
+    E.sph(14, 16, -30, 2.5, COL.ivory, { emis: 1 });
+    Env.sea(E, t, span + 1.5, hex(0x0c2a40));
+    E.box(0, -0.02, -6, 60, 0.04, 12, hex(0x9fd8ff), { a: 0.35, emis: 0.6 });
+    for (let i = 0; i < 9; i++) { const x = -18 + i * 4.5; E.cone(x, 2.2, -9, 1.3, 4.5, hex(0x0f2d24)); E.cone(x, -2.2, -9, 1.3, 4.5, hex(0x0f2d24), { rx: Math.PI, a: 0.35 }); }
+    Env.gauge(E, -6, 0, M, span, niceStep(M), "lg", 2, null);
+    const p = ap(st, "mirror"), pr = p === null ? (st.reveal ? 1 : 0) : ease(p);
+    Music.mood.under = 0.4; Music.mood.intensity = 0.2 + 0.4 * (p !== null && p < 1 ? 1 : 0);
+    const shimmer = (x, yy) => { if (Math.random() < 0.15 && !App.reduceMotion) Fx.burst([x, yy, 0], COL.amber, 1, { speed: 0.4, g: -0.5, life: 1, size: 0.05 }); };
+    const lanternAt = (x, v, tag, label, cls, ghostAt) => {
+      const yy = y(v);
+      Models.lantern(E, x, yy + Math.sin(t * 1.5) * 0.08, 0, t, COL.amber);
+      shimmer(x, yy);
+      // hilo: longitud = |v|
+      E.beam([x, 0, 0], [x, yy, 0], 0.03, COL.amber, { emis: 0.8 });
+      Labels.put(tag, label, [x + 1.1, yy, 0], cls);
+      if (pr > 0) {
+        const ry = lerp(yy, y(-v), pr);
+        Models.lantern(E, x, ry, 0, t, lerp3(COL.amber, hex(0x9fd8ff), pr), 0.55);
+        if (pr >= 1) Labels.put(tag + "r", `reflejo ${fmt(-v)}`, [x + 1.3, y(-v), 0], "hint");
+        if (p !== null && p > 0.48 && p < 0.52) Fx.ring([x, 0.02, 0], hex(0x9fd8ff));
+      }
+      Labels.put(tag + "h", `hilo ${Math.abs(v)}`, [x - 0.9, yy / 2, 0], "small goal");
+    };
+    if (q.sub === "opabs") lanternAt(0, q.n, "ln", fmt(q.n), signCls(q.n));
+    else if (q.sub === "absk") {
+      const k = q.k, swing = st.reveal ? 1 : Math.sin(t * 1.2);
+      E.beam([0, 0, 0], [0, y(k) * swing, 0], 0.03, COL.amber, { emis: 0.8 });
+      Models.lantern(E, 0, y(k) * swing, 0, t, COL.amber, 0.9);
+      Labels.put("kk", `hilo ${k}`, [1.2, y(k) * swing, 0], "goal");
+      if (st.reveal) { Models.lantern(E, 0, -y(k) * pr, 0, t, hex(0x9fd8ff), 0.6); Labels.put("kr", fmt(-k), [1.2, -y(k) * pr, 0], "neg"); Labels.put("kp", fmt(k), [1.2, y(k), 0], "pos"); }
+    } else {
+      [[-2.5, q.v1, q.e1], [2.5, q.v2, q.e2]].forEach(([x, v, e], i) => {
+        const yy = st.reveal ? y(v) * pr : 1.5;
+        Models.lantern(E, x, yy, 0, t + i, i ? COL.pos : COL.amber);
+        if (st.reveal) E.beam([x, 0, 0], [x, yy, 0], 0.03, COL.amber, { emis: 0.7 });
+        Labels.put("cx" + i, st.reveal && pr >= 1 ? `${e} = ${fmt(v)}` : e, [x, yy + 1.0, 0], "big " + (st.reveal ? signCls(v) : ""));
+      });
+    }
+    if (st.hl === 1) E.box(0, 0.03, 0, 60, 0.04, 40, COL.zero, { a: 0.25 + 0.2 * Math.sin(t * 4), emis: 1 });
+  },
+  cam(q, st) { return [[1.5, 1, 12.5], [0, 0, 0]]; },
+  diorama(E, t) { E.box(0, 0.02, 0, 4, 0.05, 2.5, hex(0x0e2f45), { a: 0.7 }); Models.lantern(E, 0, 1.6 + Math.sin(t) * 0.1, 0, t); Models.lantern(E, 0, -0.3, 0, t, hex(0x9fd8ff), 0.5); E.beam([0, 0, 0], [0, 1.6, 0], 0.03, COL.amber, { emis: 0.8 }); },
+};
+
+// ───────────────────────────── 4. GLOBO AEROSTÁTICO · sumar enteros
+EX.globo = {
+  id: "globo", name: "Globo aerostático", skill: "Sumar enteros", icon: "+", tint: "#ff6f86", music: "globo", fog: 0x1a3550,
+  blurb: "Cada burbuja de aire caliente sube 1; cada saco de arena baja 1. Junta burbuja y saco y se anulan. ¿A qué altura acabará el globo?",
+  level: L => { const d = D(L); return `Nivel ${L}: ${d.terms} sumandos entre −${d.max} y +${d.max} y resultado entre −${d.max} y +${d.max}${L >= 2 ? "; siempre hay signos distintos" : ""}${L >= 4 ? " y cruces por cero" : ""}. ${L <= 4 ? "Una burbuja o un saco por unidad." : "Burbujas y sacos con cargas grandes."}`; },
+  make: (rng, L) => MathModel.sumar(rng, L),
+  validate: q => Validate.sumar(q),
+  init(q) {
+    const st = { pairs: 0, sel: null, flight: null };
+    st.pos = q.terms.filter(x => x > 0).reduce((s, x) => s + x, 0); st.neg = -q.terms.filter(x => x < 0).reduce((s, x) => s + x, 0);
+    return st;
+  },
+  ui(q, st, A) {
+    if (q.units) {
+      A.ctl.append(A.p(`Toca una burbuja (+1) y un saco (−1) para que se anulen, o usa el botón. Quedan ${st.pos - st.pairs} burbujas y ${st.neg - st.pairs} sacos.`));
+      A.ctl.append(A.h("div", { class: "row" }, A.btn("Anular una pareja +1/−1", () => this.pair(q, st, A), "Anula una burbuja con un saco")));
+    } else A.ctl.append(A.p(`Arriba: ${st.pos} de aire caliente. Abajo: ${st.neg} de arena. Las cantidades iguales se anulan.`));
+    A.ctl.append(A.num("Altura final del globo", "inSum"));
+  },
+  pair(q, st, A) {
+    if (st.pairs >= Math.min(st.pos, st.neg)) { A.say("No quedan parejas: ya solo hay " + (st.pos > st.neg ? "burbujas" : st.neg > st.pos ? "sacos" : "nada") + ".", "hint"); return; }
+    st.pairs++; anim(st, "pop", 0.6, { idx: st.pairs - 1 }); Music.cue("pop"); setTimeout(() => Music.cue("thud"), 200);
+    Fx.burst([0, 4.2, 0], COL.pos, 10, { speed: 2, life: 0.6 }); A.refresh();
+  },
+  pick(q, st, id, A) { if (q.units && (id?.startsWith("bub") || id?.startsWith("sac"))) this.pair(q, st, A); },
+  check(q, st, A) {
+    const x = parseIntLoose(A.val("inSum"));
+    if (x === null) return { notReady: true, msg: "Escribe la altura final (un entero; usa − si queda por debajo de cero)." };
+    st.flight = x; anim(st, "fly", 2.4, { to: x }); Music.cue("whoosh", x > 0 ? 1 : -1);
+    const pairs = Math.min(st.pos, st.neg);
+    if (x === q.answer) { st.pairs = pairs; return { ok: true, msg: `${pairs} parejas burbuja/saco se anulan; queda ${q.answer === 0 ? "nada: el globo se queda en la cota cero" : `${Math.abs(q.answer)} de ${q.answer > 0 ? "aire caliente: sube a " : "arena: baja a "}${fmt(q.answer)}`}.` }; }
+    return { ok: false, ...Diagnose.sumar(q, x) };
+  },
+  hint(q, st, n) { st.hl = n; Music.cue("hint"); const pairs = Math.min(st.pos, st.neg);
+    return n === 1 ? "Una burbuja (+1) y un saco (−1) juntos no suben ni bajan: se anulan." : `Se pueden anular ${pairs} parejas. Después quedan ${Math.abs(st.pos - st.neg)} ${st.pos > st.neg ? "burbujas" : "sacos"}.`; },
+  demo(q, st) { st.pairs = Math.min(st.pos, st.neg); st.flight = q.answer; anim(st, "fly", 2.8, { to: q.answer, demo: 1 }); Music.cue("whoosh", 1); },
+  draw(E, t, dt, q, st) {
+    const span = 6, M = q.max, y = v => v / M * span;
+    E.box(0, -span - 0.5, 0, 70, 1, 40, hex(0x3b2a22));
+    E.box(0, -0.3, 0, 70, 0.6, 12, hex(0x3d7a3c));
+    E.box(0, -span / 2 - 0.3, 2.5, 6, span, 1, hex(0x4a3428), { a: 0.9 });
+    Labels.put("cn", "cañón", [0, -span / 2, 3.2], "small neg");
+    for (let i = 0; i < 10; i++) { const x = -20 + i * 4.4; if (Math.abs(x) < 4) continue; E.sph(x, 0.8, -4, 1, hex(0x2f6b35)); E.cyl(x, 0.2, -4, 0.15, 0.6, COL.wood); }
+    Env.clouds(E, t, 7, 4, 50, -10, 0.5);
+    Env.gauge(E, -7, 0, M, span, niceStep(M), "gg", 2, null);
+    let by = 0; const p = ap(st, "fly");
+    if (p !== null) by = lerp(0, y(st.anim.data.to), ease(p));
+    Music.mood.height = clamp(by / span, -1, 1); Music.mood.intensity = p !== null && p < 1 ? 0.75 : 0.35;
+    Models.balloon(E, 0, by, 0, t);
+    if (p !== null && p < 1) Fx.burst([0, by + 0.9, 0], COL.amber, 1, { speed: 1, g: -3, life: 0.5, size: 0.08 });
+    const left = Math.max(0, st.pos - st.pairs), right = Math.max(0, st.neg - st.pairs);
+    if (q.units) {
+      for (let i = 0; i < st.pos; i++) {
+        if (i < st.pairs && !(st.anim?.k === "pop" && st.anim.data.idx === i && ap(st, "pop") < 1)) continue;
+        const a = i * 2.399, r = 1.6 + (i % 3) * 0.35, x = Math.cos(a) * r, z = Math.sin(a) * r * 0.5, yy = by + 3.9 + (i % 4) * 0.35 + Math.sin(t * 2 + i) * 0.08;
+        const dying = i < st.pairs ? 1 - ap(st, "pop") : 1;
+        E.beam([0, by + 2.3, 0], [x, yy, z], 0.01, COL.ivory, { a: 0.5 });
+        E.sph(x, yy, z, 0.22 * dying, COL.pos, { emis: 0.45 });
+        E.pick("bub" + i, [x, yy, z], 0.4);
+      }
+      for (let i = 0; i < st.neg; i++) {
+        if (i < st.pairs && !(st.anim?.k === "pop" && st.anim.data.idx === i && ap(st, "pop") < 1)) continue;
+        const a = i * 2.399 + 1, r = 0.5 + (i % 3) * 0.25, x = Math.cos(a) * r, z = Math.sin(a) * r * 0.6, drop = i < st.pairs ? ap(st, "pop") * 3 : 0;
+        const yy = by - 0.6 - (i % 4) * 0.35 - drop;
+        E.beam([x * 0.3, by, z * 0.3], [x, yy + 0.2, z], 0.01, hex(0x553f2a));
+        E.box(x, yy, z, 0.28, 0.32, 0.28, COL.neg, { ry: i });
+        E.pick("sac" + i, [x, yy, z], 0.4);
+      }
+      if (st.hl === 2 || st.hl === 1) Labels.put("gpair", `${Math.min(st.pos, st.neg) - st.pairs} parejas por anular`, [3, by + 2.5, 0], "hint");
+    } else {
+      const pb = st.pairs || (p !== null ? Math.min(st.pos, st.neg) * ease(Math.min(1, p * 2)) : 0);
+      const sp = Math.max(0, st.pos - pb), sn = Math.max(0, st.neg - pb);
+      const rP = 0.35 + 1.1 * Math.sqrt(sp / M), rN = 0.3 + 0.8 * Math.sqrt(sn / M);
+      if (sp > 0) { E.sph(2.2, by + 3.6, 0, rP, COL.pos, { emis: 0.45 }); E.beam([0, by + 2.4, 0], [2.2, by + 3.6 - rP, 0], 0.02, COL.ivory); Labels.put("gp", `+${Math.round(sp)}`, [2.2, by + 3.6, 0], "big pos"); }
+      if (sn > 0) { E.box(-1.8, by - 1.2, 0, rN * 1.6, rN * 1.6, rN * 1.6, COL.neg); E.beam([0, by, 0], [-1.8, by - 1.2 + rN * 0.8, 0], 0.02, hex(0x553f2a)); Labels.put("gn", `−${Math.round(sn)}`, [-1.8, by - 1.2, 0], "big neg"); }
+      if (st.hl === 2) Labels.put("gh", `se anulan ${Math.min(st.pos, st.neg)}`, [0, by + 5.2, 0], "hint");
+    }
+    Labels.put("gexpr", q.terms.map((x, i) => i ? fmtP(x) : fmt(x)).join(" + "), [0, by + 5.6, 0], "big goal");
+    if (p !== null && p >= 1) Labels.put("gres", `altura ${fmt(st.anim.data.to)}`, [2.6, by + 1, 0], st.anim.data.to === q.answer ? "ok" : "neg");
+  },
+  cam(q, st) { return [[2, 2, 13.5], [0, 1, 0]]; },
+  diorama(E, t) { Models.balloon(E, 0, 0.4 + Math.sin(t * 0.8) * 0.3, 0, t); for (let i = 0; i < 3; i++) E.sph(-1.6 + i * 1.6, 4 + Math.sin(t + i) * 0.1, 0, 0.22, COL.pos, { emis: 0.4 }); },
+};
+
+// ───────────────────────────── 5. AVIÓN ANFIBIO · restar enteros
+EX.avion = {
+  id: "avion", name: "Avión anfibio", skill: "Restar enteros", icon: "−", tint: "#5ef0b0", music: "avion", fog: 0x2a4f6e,
+  blurb: "Un hidroavión que también bucea. La torre ordena «restar»; la palanca inversora lo convierte en «sumar el opuesto». ¿A qué cota llegará?",
+  level: L => { const d = D(L); return `Nivel ${L}: a − b con a y b entre −${d.max} y +${d.max} y resultado entre −${d.max} y +${d.max}${L >= 2 ? "; muchos sustraendos negativos" : ""}${L >= 4 ? " y cruces por el nivel del mar" : ""}.`; },
+  make: (rng, L) => MathModel.restar(rng, L),
+  validate: q => Validate.restar(q),
+  init(q) { return { lever: false }; },
+  ui(q, st, A) {
+    A.ctl.append(A.h("div", { class: "lever" },
+      A.h("button", { type: "button", class: "btn", "aria-pressed": st.lever ? "true" : "false", onclick: () => { if (!st.lever) { st.lever = true; anim(st, "lever", 0.8); Music.cue("lever"); A.refresh(); } } },
+        st.lever ? "Palanca inversora: activada" : "Accionar la palanca inversora"),
+      A.h("span", { class: "num", style: "font-size:20px" }, st.lever ? `${fmt(q.a)} + ${fmtP(-q.b)}` : `${fmt(q.a)} − ${fmtP(q.b)}`)));
+    A.ctl.append(A.num("Cota de llegada", "inRes", !st.lever));
+  },
+  check(q, st, A) {
+    if (!st.lever) return { notReady: true, msg: "Primero acciona la palanca inversora: convierte «restar b» en «sumar el opuesto de b»." };
+    const x = parseIntLoose(A.val("inRes"));
+    if (x === null) return { notReady: true, msg: "Escribe la cota de llegada." };
+    anim(st, "fly", 3, { to: x }); Music.cue("engine", 1);
+    if (x === q.answer) return { ok: true, msg: `Restar ${fmtP(q.b)} equivale a sumar ${fmtP(-q.b)}: desde ${fmt(q.a)} ${-q.b > 0 ? "sube" : "baja"} ${Math.abs(q.b)} hasta ${fmt(q.answer)}.` };
+    return { ok: false, ...Diagnose.restar(q, x) };
+  },
+  hint(q, st, n) { st.hl = n; Music.cue("hint");
+    return n === 1 ? `Restar un número es sumar su opuesto. El opuesto de ${fmt(q.b)} es ${fmt(-q.b)}.` : `${fmt(q.a)} + ${fmtP(-q.b)}: desde ${fmt(q.a)} ${-q.b > 0 ? "sube" : "baja"} ${Math.abs(q.b)}. La flecha violeta lo muestra.`; },
+  demo(q, st) { st.lever = true; anim(st, "fly", 3.4, { to: q.answer }); Music.cue("lever"); },
+  draw(E, t, dt, q, st) {
+    const span = 6, M = q.max, y = v => v / M * span;
+    Env.sea(E, t, span + 1.5);
+    E.box(0, -span - 1.3, -5, 80, 0.4, 14, hex(0x2a3a33));
+    Env.clouds(E, t * 3, 9, 3.5, 60, -6, 1.5);
+    for (let i = 0; i < 14; i++) { const x = ((i * 9 - t * 3) % 80 + 80) % 80 - 40; E.sph(x, -span * 0.7 + (i % 3), -6, 0.25, hex(0x9fe6ff), { a: 0.5, emis: 0.3 }); }
+    Env.gauge(E, -8, 0, M, span, niceStep(M), "ag", 2, null);
+    let py = y(q.a), pitch = 0, roll = Math.sin(t * 1.3) * 0.08;
+    const p = ap(st, "fly");
+    if (p !== null) {
+      const to = st.anim.data.to, e = ease(p);
+      py = lerp(y(q.a), y(to), e);
+      pitch = Math.sin(p * Math.PI) * clamp((to - q.a) / M, -1, 1) * 0.9;
+      if (p < 1) {
+        Fx.burst([-1.2, py, 0], py < 0 ? hex(0x9fe6ff) : COL.ivory, 1, { speed: 0.6, g: py < 0 ? -1 : 0, life: 0.8, size: 0.09 });
+        const prev = st.prevY ?? py;
+        if (Math.sign(prev) !== Math.sign(py) && prev !== 0) { Music.cue("splash"); Fx.burst([0, 0, 0], hex(0x9fe6ff), 40, { speed: 5, lift: 3 }); Fx.ring([0, 0.02, 0], hex(0x9fe6ff), { grow: 5 }); }
+      }
+    }
+    st.prevY = py;
+    Music.mood.height = clamp(py / span, -1, 1); Music.mood.under = py < 0 ? 0.7 : 0; Music.mood.intensity = p !== null && p < 1 ? 0.85 : 0.5;
+    Models.plane(E, 0, py, 0, pitch, roll, hex(0xffe9b0), t);
+    E.sph(0, y(q.a), 0, 0.12, COL.amber, { emis: 1 });
+    Labels.put("aa", `salida ${fmt(q.a)}`, [-2.4, y(q.a), 0], "goal");
+    // Flecha del desplazamiento (pista 2 o tras accionar la palanca y comprobar).
+    if (st.hl === 2 || (p !== null && p >= 1)) {
+      const to = q.a - q.b, x = 2.4;
+      E.beam([x, y(q.a), 0], [x, y(to), 0], 0.07, COL.hint, { emis: 0.8 });
+      E.cone(x, y(to), 0, 0.22, 0.45, COL.hint, { emis: 0.8, rx: to < q.a ? Math.PI : 0 });
+      Labels.put("ad", `${fmtP(-q.b)}`, [x + 1.1, (y(q.a) + y(to)) / 2, 0], "hint");
+    }
+    // Palanca 3D.
+    const lp = ap(st, "lever"), ang = st.lever ? lerp(-0.7, 0.7, lp === null ? 1 : easeBack(lp)) : -0.7;
+    E.box(5.5, -0.2 + 2.2, 2, 1.2, 0.3, 0.8, hex(0x30343a));
+    E.beam([5.5, 2.15, 2], [5.5 + Math.sin(ang) * 1.2, 2.15 + Math.cos(ang) * 1.2, 2], 0.06, COL.steel);
+    E.sph(5.5 + Math.sin(ang) * 1.2, 2.15 + Math.cos(ang) * 1.2, 2, 0.18, st.lever ? COL.pos : COL.neg, { emis: st.hl === 1 ? 1 : 0.5 });
+    Labels.put("alv", st.lever ? `${fmt(q.a)} + ${fmtP(-q.b)}` : `${fmt(q.a)} − ${fmtP(q.b)}`, [5.5, 4.1, 2], "big " + (st.lever ? "pos" : "goal"));
+    if (p !== null && p >= 1) Labels.put("aar", `llega a ${fmt(st.anim.data.to)}`, [2.2, y(st.anim.data.to) + 0.8, 0], st.anim.data.to === q.answer ? "ok" : "neg");
+  },
+  cam(q, st) { return [[1, 1, 13], [0.5, 0, 0]]; },
+  diorama(E, t) { E.box(0, 0.02, 0, 4, 0.05, 2.4, hex(0x1f7a9a), { a: 0.6 }); const yy = Math.sin(t * 0.9) * 1.8 + 0.8; Models.plane(E, 0, yy, 0, Math.cos(t * 0.9) * 0.5, 0, hex(0xffe9b0), t); },
+};
+
+// ───────────────────────────── 6. SUBMARINO DEL TIEMPO · multiplicar enteros
+EX.sub = {
+  id: "sub", name: "Submarino del tiempo", skill: "Multiplicar enteros", icon: "×", tint: "#ffc233", music: "sub", fog: 0x06202c,
+  blurb: "El submarino se mueve a velocidad constante. ¿Dónde estará dentro de unos minutos… o dónde estaba hace unos minutos? El tiempo negativo rebobina la película.",
+  level: L => { const d = D(L); return `Nivel ${L}: velocidad × tiempo con factores entre −${d.factor} y +${d.factor} (al menos uno negativo)${L <= 2 ? "; a veces la velocidad es 0" : ""}. Posición medida desde «ahora» (0).`; },
+  make: (rng, L) => { const q = MathModel.multiplicar(rng, L); return { ...q, text: `Posición = tiempo ${fmt(q.a)} min · velocidad ${fmtP(q.b)} m/min` }; },
+  validate: q => Validate.multiplicar(q),
+  init(q) { return { sense: null }; },
+  ui(q, st, A) {
+    const v = q.b, tm = q.a;
+    A.ctl.append(A.p(`Velocidad: ${fmt(v)} m/min (${v > 0 ? "sube" : v < 0 ? "baja" : "quieto"}). ${tm > 0 ? `¿Dónde estará dentro de ${tm} min?` : `¿Dónde estaba hace ${-tm} min?`}`));
+    const g = A.h("div", { class: "chips", role: "radiogroup", "aria-label": "Predicción" });
+    for (const [k, txt] of [["up", "▲ Más arriba"], ["down", "▼ Más abajo"], ["same", "◇ En el mismo sitio"]])
+      g.append(A.h("button", { type: "button", class: "chip", role: "radio", "aria-checked": st.sense === k ? "true" : "false", "aria-pressed": st.sense === k ? "true" : "false", onclick: () => { st.sense = k; Music.cue("tick", k === "up" ? 3 : k === "down" ? -3 : 0); A.refresh(); } }, txt));
+    A.ctl.append(g, A.num(`Posición = ${fmt(tm)} · ${fmtP(v)}`, "inMul"));
+  },
+  check(q, st, A) {
+    const x = parseIntLoose(A.val("inMul"));
+    if (!st.sense) return { notReady: true, msg: "Predice primero: ¿más arriba, más abajo o en el mismo sitio?" };
+    if (x === null) return { notReady: true, msg: "Escribe la posición (entero con su signo)." };
+    anim(st, "run", 1 + 0.45 * Math.abs(q.a), { to: x }); if (q.a < 0) Music.cue("rewind");
+    const want = q.answer > 0 ? "up" : q.answer < 0 ? "down" : "same";
+    if (x === q.answer && st.sense === want) return { ok: true, msg: `${fmt(q.a)} · ${fmtP(q.b)} = ${fmt(q.answer)}. ${(q.a < 0) + (q.b < 0) === 2 ? "Va bajando, pero rebobinamos: hace un rato estaba más arriba. Dos signos negativos dan positivo." : q.answer === 0 ? "Con velocidad 0 no se mueve." : "Un solo signo negativo: el resultado es negativo."}` };
+    if (x === q.answer) return { ok: false, tag: "reglaSignos", msg: `El número es correcto, pero la predicción no: ${fmt(q.answer)} está ${q.answer > 0 ? "más arriba" : q.answer < 0 ? "más abajo" : "en el mismo sitio"}.` };
+    return { ok: false, ...Diagnose.multiplicar(q, x) };
+  },
+  hint(q, st, n) { st.hl = n; Music.cue("hint"); const negs = (q.a < 0) + (q.b < 0);
+    return n === 1 ? `Hay ${negs} signo${negs === 1 ? "" : "s"} negativo${negs === 1 ? "" : "s"}: ${q.b < 0 ? "baja" : "sube"}${q.a < 0 ? " y además rebobinamos la película (cada signo negativo invierte el sentido)" : ""}.` : `Cada minuto cambia ${Math.abs(q.b)} m; en ${Math.abs(q.a)} minutos son ${Math.abs(q.a * q.b)} m.`; },
+  demo(q, st) { st.sense = q.answer > 0 ? "up" : q.answer < 0 ? "down" : "same"; anim(st, "run", 1.2 + 0.5 * Math.abs(q.a), { to: q.answer }); if (q.a < 0) Music.cue("rewind"); },
+  draw(E, t, dt, q, st) {
+    const F = q.factor, M = F * F, span = 6.5, y = v => v / M * span;
+    E.box(0, -span - 1.2, 0, 70, 1, 40, hex(0x2a2a22));
+    for (let i = 0; i < 16; i++) E.cone(-24 + i * 3.2, -span - 0.4, -5 - (i % 3), 0.5 + (i % 2) * 0.3, 1.5 + (i % 3), hex(0x2f6b4c));
+    E.box(0, span + 1, 0, 70, 0.1, 40, hex(0x3aa0c0), { a: 0.35, emis: 0.3 });
+    for (let i = 0; i < 22; i++) { const yy = ((i * 1.37 + t * 0.7) % (span * 2 + 2)) - span - 1; E.sph(-10 + (i * 3.1) % 22, yy, -4 + (i % 3), 0.06 + (i % 3) * 0.03, hex(0xbff3ff), { a: 0.5, emis: 0.5 }); }
+    Env.gauge(E, -6, 0, M, span, niceStep(M), "sg", 2, null);
+    Labels.put("snow", "AHORA 0", [-7.6, 0, 0], "zero");
+    let sy = 0, rewinding = false;
+    const p = ap(st, "run");
+    if (p !== null) {
+      const total = Math.abs(q.a), stepF = Math.min(total, Math.floor(ease(p) * total + 1e-6));
+      const frac = ease(p) * total;
+      sy = y(Math.sign(q.a) * q.b * frac);
+      rewinding = q.a < 0 && p < 1;
+      if (Math.floor(frac) !== st.lastPulse && p < 1) { st.lastPulse = Math.floor(frac); Music.cue("ping"); Fx.ring([0, sy, 0.8], COL.pos, { grow: 2, life: 0.8 }); }
+      for (let k = 1; k <= stepF; k++) { const yy = y(Math.sign(q.a) * q.b * k); E.sph(1.6, yy, 0, 0.1, COL.amber, { emis: 1 }); if (total <= 15) Labels.put("sp" + k, `${fmt(Math.sign(q.a) * k)} min`, [2.6, yy, 0], "small goal"); }
+      if (p >= 1) Labels.put("sres", `${fmt(st.anim.data.to)} m`, [2.8, y(st.anim.data.to), 0], st.anim.data.to === q.answer ? "ok" : "neg");
+    } else st.lastPulse = -1;
+    Music.mood.under = 0.9; Music.mood.rewind = rewinding ? 1 : 0; Music.mood.height = clamp(sy / span, -1, 1); Music.mood.intensity = p !== null && p < 1 ? 0.7 : 0.3;
+    Models.sub(E, 0, sy, 0, hex(0xffc233), rewinding ? -t : t, Math.PI / 2 * (q.b >= 0 ? 1 : 1));
+    E.cone(0, sy + (q.b >= 0 ? 1.6 : -1.6), 0, 0.25, 0.5, q.b >= 0 ? COL.pos : COL.neg, { rx: q.b >= 0 ? 0 : Math.PI, emis: 0.6 });
+    // Película: en tiempo negativo, marco y barra de rebobinado.
+    if (q.a < 0) {
+      const glow = rewinding ? 0.6 + 0.4 * Math.sin(t * 20) : 0.3;
+      E.box(0, span + 0.4, 1.5, 9, 0.35, 0.05, COL.hint, { emis: glow }); E.box(0, -span - 0.4, 1.5, 9, 0.35, 0.05, COL.hint, { emis: glow });
+      for (let i = 0; i < 10; i++) { E.box(-4.2 + i * 0.93, span + 0.4, 1.53, 0.3, 0.18, 0.02, hex(0x111111)); E.box(-4.2 + i * 0.93, -span - 0.4, 1.53, 0.3, 0.18, 0.02, hex(0x111111)); }
+      Labels.put("rw", rewinding ? "◀◀ REBOBINANDO" : `◀◀ hace ${-q.a} min`, [0, span + 1.1, 1.5], "hint");
+    }
+    Labels.put("sv", `velocidad ${fmt(q.b)} m/min`, [4.5, sy + 1.2, 0], signCls(q.b));
+    if (st.hl === 2) Labels.put("sh", `${Math.abs(q.a)} × ${Math.abs(q.b)} = ${Math.abs(q.a * q.b)}`, [4.5, sy - 1.2, 0], "hint");
+  },
+  cam(q, st) { return [[2, 0.5, 13.5], [0.5, 0, 0]]; },
+  diorama(E, t) { E.box(0, 0.9, 0, 3.6, 1.8, 2, hex(0x0e4a63), { a: 0.6 }); Models.sub(E, 0, 0.9 + Math.sin(t) * 0.3, 0, hex(0xffc233), t); },
+};
+
+// ───────────────────────────── 7. TELEFÉRICO · dividir enteros
+EX.tele = {
+  id: "tele", name: "Teleférico", skill: "Dividir enteros", icon: ":", tint: "#b79bff", music: "tele", fog: 0x1c3048,
+  blurb: "El teleférico cambia de altura al mismo ritmo cada minuto. Conoces el cambio total y el tiempo: reparte el viaje en tramos iguales.",
+  level: L => { const d = D(L); return `Nivel ${L}: divisiones exactas; tiempo entre 2 y ${d.factor} min en valor absoluto (negativo = hacia el pasado), cambio por minuto hasta ±${d.factor} m (cambio total hasta ±${d.factor * d.factor} m). El divisor nunca es 0.`; },
+  make: (rng, L) => MathModel.dividir(rng, L),
+  validate: q => Validate.dividir(q),
+  init(q) { return { sense: null }; },
+  ui(q, st, A) {
+    A.ctl.append(A.p(q.b > 0 ? `En los próximos ${q.b} min su altura cambia ${fmt(q.a)} m.` : `Si rebobinamos ${-q.b} min (tiempo ${fmt(q.b)}), su altura cambia ${fmt(q.a)} m.`));
+    const g = A.h("div", { class: "chips", role: "radiogroup", "aria-label": "Sentido" });
+    for (const [k, txt] of [["up", "▲ Sube cada minuto"], ["down", "▼ Baja cada minuto"]])
+      g.append(A.h("button", { type: "button", class: "chip", role: "radio", "aria-checked": st.sense === k ? "true" : "false", "aria-pressed": st.sense === k ? "true" : "false", onclick: () => { st.sense = k; Music.cue("tick", k === "up" ? 3 : -3); A.refresh(); } }, txt));
+    A.ctl.append(g, A.num(`Cambio por minuto = ${fmt(q.a)} : ${fmtP(q.b)}`, "inDiv"));
+  },
+  check(q, st, A) {
+    const x = parseIntLoose(A.val("inDiv"));
+    if (!st.sense) return { notReady: true, msg: "Elige si el teleférico sube o baja cada minuto." };
+    if (x === null) return { notReady: true, msg: "Escribe el cambio por minuto." };
+    anim(st, "ride", 1 + 0.4 * Math.abs(q.b), { per: x }); Music.cue("whoosh", 1); if (q.b < 0) Music.cue("rewind");
+    const want = q.answer > 0 ? "up" : "down";
+    if (x === q.answer && st.sense === want) return { ok: true, msg: `${fmt(q.a)} : ${fmtP(q.b)} = ${fmt(q.answer)}. ${Math.abs(q.a)} m repartidos en ${Math.abs(q.b)} tramos dan ${Math.abs(q.answer)} m por tramo; ${sgn(q.a) === sgn(q.b) ? "signos iguales: sube" : "signos distintos: baja"}.` };
+    if (x === q.answer) return { ok: false, tag: "reglaSignos", msg: `El número está bien, pero el teleférico ${q.answer > 0 ? "sube" : "baja"} cada minuto.` };
+    return { ok: false, ...Diagnose.dividir(q, x) };
+  },
+  hint(q, st, n) { st.hl = n; Music.cue("hint");
+    return n === 1 ? (q.b < 0 ? "Al rebobinar se invierte el sentido. Signos iguales: sube; distintos: baja." : "Si el cambio total es negativo y el tiempo positivo, baja cada minuto.") : `${Math.abs(q.a)} : ${Math.abs(q.b)} = ${Math.abs(q.answer)}. Ahora decide el signo.`; },
+  demo(q, st) { st.sense = q.answer > 0 ? "up" : "down"; anim(st, "ride", 1.4 + 0.45 * Math.abs(q.b), { per: q.answer }); if (q.b < 0) Music.cue("rewind"); },
+  draw(E, t, dt, q, st) {
+    const F = q.factor, M = F * F, span = 6, y = v => v / M * span, n = Math.abs(q.b), W = 14;
+    E.box(0, -span - 1, 0, 70, 1, 40, hex(0x24343a));
+    for (let i = 0; i < 9; i++) { const x = -26 + i * 6.5; E.cone(x, -span + 3, -10, 4 + (i % 2), 9 + (i % 3) * 2, hex(0x3b4a55)); E.cone(x, -span + 3 + 3.5 + (i % 3), -10, 1.2, 2, COL.ivory); }
+    Env.clouds(E, t, 6, span - 1, 50, -7, 0.3);
+    // Cable de x=-W/2 (altura 0) a x=W/2 (altura del cambio total). Torres en cada tramo.
+    const total = q.a * (q.b > 0 ? 1 : -1); // cambio en el sentido del tiempo hacia delante
+    const X = k => -W / 2 + W * k / n, Y = k => y(total * k / n);
+    E.beam([X(0), Y(0) + 1.2, 0], [X(n), Y(n) + 1.2, 0], 0.03, COL.steel);
+    for (let k = 0; k <= n; k++) {
+      E.beam([X(k), -span - 0.5, 0], [X(k), Y(k) + 1.2, 0], 0.08, hex(0x8a8f96));
+      E.box(X(k), Y(k) + 1.25, 0, 0.6, 0.12, 0.4, hex(0x8a8f96));
+      if (n <= 15) Labels.put("tk" + k, `${q.b > 0 ? "+" : "−"}${k} min`, [X(k), -span - 0.2, 0.6], "small " + (q.b > 0 ? "pos" : "neg"));
+    }
+    Labels.put("ttot", `cambio total ${fmt(q.a)} m en ${fmt(q.b)} min`, [0, span + 1, 0], "big goal");
+    let ck = 0; const p = ap(st, "ride");
+    if (p !== null) ck = ease(p) * n;
+    if (q.b < 0 && p !== null) ck = n - ease(p) * n; // al rebobinar, recorre el cable hacia atrás
+    const cx = lerp(X(0), X(n), ck / n), cy = lerp(Y(0), Y(n), ck / n);
+    Models.cabin(E, cx, cy, 0, COL.neg, t);
+    Music.mood.height = clamp(cy / span, -1, 1); Music.mood.intensity = p !== null && p < 1 ? 0.7 : 0.35; Music.mood.rewind = q.b < 0 && p !== null && p < 1 ? 1 : 0;
+    if (p !== null) {
+      const per = st.anim.data.per, done = Math.floor(ease(p) * n);
+      if (done !== st.lastSeg && p < 1) { st.lastSeg = done; Music.cue("tick", clamp(per / F * 3, -4, 4)); }
+      for (let k = 0; k < Math.min(done, n); k++) Labels.put("ts" + k, fmt(per), [(X(k) + X(k + 1)) / 2, (Y(k) + Y(k + 1)) / 2 + 2, 0], per === q.answer ? "small ok" : "small neg");
+    } else st.lastSeg = -1;
+    if (st.hl === 2) Labels.put("th", `${Math.abs(q.a)} : ${Math.abs(q.b)} = ${Math.abs(q.answer)}`, [0, span - 0.2, 0], "hint");
+    if (q.b < 0) Labels.put("trw", "◀◀ tiempo hacia el pasado", [0, -span + 0.6, 1], "hint");
+  },
+  cam(q, st) { return [[0, 1.5, 15.5], [0, 0, 0]]; },
+  diorama(E, t) { E.beam([-2, 0.6, 0], [2, 3, 0], 0.03, COL.steel); const k = (Math.sin(t * 0.6) + 1) / 2; Models.cabin(E, lerp(-2, 2, k), lerp(0.6, 3, k) - 1.2, 0, COL.neg, t); E.cyl(-2, 0.3, 0, 0.1, 0.6, COL.steel); E.cyl(2, 1.5, 0, 0.1, 3, COL.steel); },
+};
+
+// ───────────────────────────── 8. DRON DE RESCATE · operaciones combinadas
+EX.dron = {
+  id: "dron", name: "Dron de rescate", skill: "Operaciones combinadas", icon: "( )", tint: "#ff9a3d", music: "dron", fog: 0x1d1a2a,
+  blurb: "Una montañera espera en una cornisa. El dron sigue un programa de vuelo: ejecuta las operaciones en el orden correcto y llegará a su altura.",
+  level: L => { const c = D(L).combo; return `Nivel ${L}: ${c.ops} operaciones${c.paren ? " con un par de paréntesis" : " sin paréntesis"}; sumandos hasta ±${c.max}, factores y divisores hasta ±${c.fmax} (dividendos exactos hasta ±${c.fmax * c.fmax}). Todos los pasos dan enteros.`; },
+  make: (rng, L) => MathModel.combinadas(rng, L),
+  validate: q => Validate.combinadas(q),
+  init(q) { return { tokens: q.tokens, done: [], pending: null, alt: 0, fromAlt: 0 }; },
+  ui(q, st, A) {
+    A.ctl.append(A.p(st.tokens.length > 1 ? "Toca la operación que va primero y calcula su resultado." : "¡Programa completo!"));
+    const ex = A.h("div", { class: "expr-ops", "aria-label": "Programa de vuelo" });
+    st.tokens.forEach((tk, k) => {
+      if (tk.t === "n") ex.append(A.h("span", { class: "num " + signCls(tk.v) }, k > 0 && st.tokens[k - 1].t !== "(" && tk.v < 0 ? `(${fmtPlain(tk.v)})` : fmtPlain(tk.v)));
+      else if (isOp(tk.t)) ex.append(A.h("button", { type: "button", "aria-label": "Operación " + { "+": "más", "-": "menos", "*": "por", "/": "entre" }[tk.t], "aria-pressed": st.pending === k ? "true" : "false", onclick: () => this.choose(q, st, k, A) }, { "+": "+", "-": "−", "*": "·", "/": ":" }[tk.t]));
+      else ex.append(A.h("span", {}, tk.t));
+    });
+    A.ctl.append(ex);
+    if (st.pending !== null) {
+      const tk = st.tokens, k = st.pending;
+      A.ctl.append(A.num(`${fmt(tk[k - 1].v)} ${{ "+": "+", "-": "−", "*": "·", "/": ":" }[tk[k].t]} ${fmtP(tk[k + 1].v)} =`, "inStep"));
+    }
+    if (st.done.length) A.ctl.append(A.h("div", { class: "num", style: "font-size:15px;color:var(--muted)" }, st.done.map(s => stepText(s)).join(" → ")));
+  },
+  choose(q, st, k, A) {
+    if (st.tokens.length <= 1) return;
+    if (!opAllowed(st.tokens, k)) {
+      st.shake = App.now; Music.cue("fail");
+      A.registerError("jerarquia", "Esa operación todavía no toca: primero se resuelven los paréntesis, después · y : (de izquierda a derecha) y al final + y −.");
+      return;
+    }
+    st.pending = k; Music.cue("lever"); A.refresh(); A.focus("inStep");
+  },
+  check(q, st, A) {
+    if (st.tokens.length <= 1) return { ok: true, msg: `El dron llega a ${fmt(q.answer)} m y rescata a la montañera. Orden seguido: ${q.steps.map(stepText).join("; ")}.` };
+    if (st.pending === null) return { notReady: true, msg: "Toca primero la operación que debe ir antes." };
+    const x = parseIntLoose(A.val("inStep"));
+    if (x === null) return { notReady: true, msg: "Escribe el resultado de esa operación." };
+    const r = applyOp(st.tokens, st.pending);
+    if (x !== r.result) {
+      const fake = { kind: "combinadas", tokens: [{ t: "n", v: r.a }, { t: r.op }, { t: "n", v: r.b }], steps: [{ a: r.a, b: r.b, op: r.op, result: r.result }], answer: r.result };
+      const tag = x === -r.result ? (r.op === "*" || r.op === "/" ? "reglaSignos" : "signo") : "calculo";
+      return { ok: false, tag, msg: `${fmt(r.a)} ${{ "+": "+", "-": "−", "*": "·", "/": ":" }[r.op]} ${fmtP(r.b)} no da ${fmt(x)}. ${r.op === "-" ? `Restar ${fmtP(r.b)} es sumar ${fmtP(-r.b)}.` : r.op === "*" || r.op === "/" ? "Recuerda la regla de los signos: iguales dan +, distintos dan −." : "Las cargas de distinto signo se anulan."} Inténtalo otra vez.` };
+    }
+    st.done.push({ a: r.a, b: r.b, op: r.op, result: r.result });
+    st.tokens = r.tokens; st.pending = null;
+    st.fromAlt = st.alt; st.alt = r.result; anim(st, "move", 1.2); Music.cue("success");
+    if (st.tokens.length <= 1) { anim(st, "rescue", 2.6); setTimeout(() => Music.cue("fanfare"), 600); return { ok: true, msg: `¡Rescate! ${q.steps.map(stepText).join("; ")}. El orden importa: paréntesis, después · y :, al final + y −.` }; }
+    return { partial: true, msg: `${stepText(st.done[st.done.length - 1])}. El dron se mueve a ${fmt(r.result)}. ¿Cuál va ahora?` };
+  },
+  hint(q, st, n) { st.hl = n; Music.cue("hint"); const k = st.tokens.findIndex((_, i) => opAllowed(st.tokens, i)); const r = applyOp(st.tokens, k);
+    return n === 1 ? "Orden: primero los paréntesis, después · y : de izquierda a derecha, y al final + y −. Las operaciones posibles brillan." : `La siguiente es ${fmt(r.a)} ${{ "+": "+", "-": "−", "*": "·", "/": ":" }[r.op]} ${fmtP(r.b)} = ${fmt(r.result)}.`; },
+  demo(q, st) { st.autoplay = true; st.autoT = App.now; },
+  draw(E, t, dt, q, st) {
+    const maxAbs = Math.max(20, ...q.steps.map(s => Math.abs(s.result)), Math.abs(q.answer)), span = 5, y = v => v / maxAbs * span;
+    if (st.autoplay && st.tokens.length > 1 && App.now - (st.autoT ?? 0) > 1.4 * App.motionScale) {
+      const k = st.tokens.findIndex((_, i) => opAllowed(st.tokens, i)), r = applyOp(st.tokens, k);
+      st.done.push({ a: r.a, b: r.b, op: r.op, result: r.result }); st.tokens = r.tokens; st.fromAlt = st.alt; st.alt = r.result; anim(st, "move", 1.1); Music.cue("success"); st.autoT = App.now;
+      if (st.tokens.length <= 1) { anim(st, "rescue", 2.6); Music.cue("fanfare"); }
+      App.refreshControls();
+    }
+    // Cañón con paredes de roca.
+    for (const s of [-1, 1]) for (let i = 0; i < 8; i++) E.box(s * (9 + (i % 2)), -span + i * 1.8, -1 - (i % 3), 3, 2, 6, hex(0x5a4a5e - (i % 3) * 0x080808));
+    E.box(0, -span - 1, 0, 40, 1, 20, hex(0x2a2333));
+    E.box(0, 0, -4, 40, 0.05, 0.05, COL.zero, { emis: 0.6 });
+    Labels.put("dz", "cota 0", [-8, 0.4, -4], "small zero");
+    Env.gauge(E, -6.5, 0, maxAbs, span, niceStep(maxAbs), "dg", 2, null);
+    // Cornisa con la montañera.
+    const gy = y(q.answer);
+    E.box(5.5, gy - 0.4, 0, 3, 0.5, 2, hex(0x6b5a70));
+    const rp = ap(st, "rescue");
+    if (!(rp !== null && rp > 0.5)) Models.hero(E, 5.5, gy - 0.15, 0, -Math.PI / 2, t, 0, COL.neg);
+    Labels.put("dgoal", `${fmt(q.answer)} m`, [7.3, gy, 0], st.tokens.length <= 1 ? "ok" : "goal");
+    // Dron.
+    const mp = ap(st, "move"); let dy = y(st.alt), dx = 0, tilt = 0;
+    if (mp !== null && mp < 1) { dy = lerp(y(st.fromAlt), y(st.alt), ease(mp)); tilt = Math.sin(mp * Math.PI) * 0.3 * Math.sign(st.alt - st.fromAlt); if (Math.random() < 0.4) Fx.burst([0, dy - 0.3, 0], COL.amber, 1, { speed: 1, g: 2, life: 0.4, size: 0.06 }); }
+    if (rp !== null) { dx = lerp(0, 5.5, ease(Math.min(1, rp * 2))); dy = lerp(y(st.alt), gy + 1.2, ease(Math.min(1, rp * 2))); if (rp > 0.5) { Models.hero(E, dx, dy - 1.4, 0, 0, t, 0, COL.neg); E.beam([dx, dy, 0], [dx, dy - 0.3, 0], 0.02, COL.ivory); } if (rp > 0.55 && !st.party) { st.party = 1; confetti([dx, dy, 0], 70); } }
+    if (st.shake && App.now - st.shake < 0.5) { dx += Math.sin(App.now * 80) * 0.15; Fx.burst([0, dy, 0], COL.neg, 1, { speed: 2, life: 0.3, size: 0.05 }); }
+    Models.drone(E, dx, dy, 0, t, tilt);
+    Labels.put("dalt", `${fmt(st.alt)} m`, [dx - 1.4, dy + 0.6, 0], signCls(st.alt));
+    Music.mood.height = clamp(dy / span, -1, 1); Music.mood.intensity = 0.4 + 0.15 * st.done.length;
+    Labels.put("dprog", tokensToString(st.tokens), [0, span + 1.3, 0], "big goal");
+  },
+  cam(q, st) { return [[1.5, 0.8, 16], [1, 0.3, 0]]; },
+  diorama(E, t) { Models.drone(E, 0, 1.6 + Math.sin(t * 1.3) * 0.5, 0, t, Math.sin(t) * 0.2); E.box(1.6, 0.6, 0, 1, 0.3, 1, hex(0x6b5a70)); Models.hero(E, 1.6, 0.75, 0, -Math.PI / 2, t, 0, COL.neg); },
+};
+
+// ───────────────────────────── 9. LA GRAN EXPEDICIÓN · misión mixta
+EX.tour = {
+  id: "tour", name: "La gran expedición", skill: "Misión mixta", icon: "★", tint: "#f3ecd9", music: "tour", fog: 0x14283a,
+  blurb: "Misiones de 3 a 5 paradas que enlazan retos de todas las aventuras. Entre parada y parada sobrevuelas la base.",
+  level: L => `Nivel ${L}: misiones de ${L <= 3 ? 3 : L <= 7 ? 4 : 5} paradas con retos de las otras ocho aventuras al nivel ${L}; la sesión completa son ${CONFIG.RETOS} retos.`,
+  stops: L => L <= 3 ? 3 : L <= 7 ? 4 : 5,
+};
+const EX_ORDER = ["rocas", "vertical", "lago", "globo", "avion", "sub", "tele", "dron", "tour"];
+const EX_PLAY = EX_ORDER.slice(0, 8);
+
+// ═════════════════════════════════════════════ RANKING · puntuación y clasificación compartida
+// ┌──────────────────────────────────────────────────────────────────────────────────────────┐
+// │ PARAMETRIZAR: pega aquí la URL de tu aplicación web de Google Apps Script (acaba en /exec).│
+// │ También se puede pegar desde el «Panel docente» sin tocar el código (se guarda en este    │
+// │ navegador). Si se deja vacía, el ranking funciona solo en local.                          │
+// └──────────────────────────────────────────────────────────────────────────────────────────┘
+const RANKING_URL = "";
+
+// Puntos de un reto resuelto: base según intensidad + bonificación por rapidez − errores − ayudas.
+// El tiempo de las animaciones no cuenta; se mide solo el tiempo pensando.
+const SCORING = { base: 100, levelBonus: 0.15, speedMax: 100, speedZeroAt: 60, errorCost: 25, hintCost: 30, demoFactor: 0.5, min: 10 };
+function scoreChallenge(level, seconds, errors, hints, demo) {
+  const mult = 1 + (level - 1) * SCORING.levelBonus;
+  const speed = SCORING.speedMax * Math.max(0, 1 - seconds / SCORING.speedZeroAt);
+  let pts = (SCORING.base + speed) * mult - SCORING.errorCost * errors - SCORING.hintCost * hints;
+  if (demo) pts *= SCORING.demoFactor;
+  return Math.max(SCORING.min, Math.round(pts));
+}
+const maxScore = level => Math.round((SCORING.base + SCORING.speedMax) * (1 + (level - 1) * SCORING.levelBonus)) * CONFIG.RETOS;
+
+const Ranking = {
+  url() { return (Store.data.prefs.rankingUrl || RANKING_URL || "").trim(); },
+  shared() { return /^https:\/\/script\.google(usercontent)?\.com\//.test(this.url()); },
+  cleanName(s) { return String(s || "").replace(/[^\p{L}\p{N} ._-]/gu, "").replace(/\s+/g, " ").trim().slice(0, 20); },
+  localKey: (ex, L) => `${ex}|${L}`,
+  localList(ex, L) { return (Store.data.ranking?.[this.localKey(ex, L)] || []).slice(0, 10); },
+  saveLocal(entry) {
+    Store.data.ranking = Store.data.ranking || {};
+    const k = this.localKey(entry.ex, entry.level), list = (Store.data.ranking[k] || []).concat([entry]);
+    list.sort((a, b) => b.score - a.score || a.time - b.time);
+    Store.data.ranking[k] = list.slice(0, 20); Store.save();
+  },
+  async submit(entry) {
+    this.saveLocal(entry);
+    if (!this.shared()) return { ok: true, shared: false };
+    try {
+      // text/plain evita la petición previa CORS; Apps Script lee el cuerpo igualmente.
+      const r = await fetch(this.url(), { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "add", ...entry }) });
+      const j = await r.json();
+      return j.ok ? { ok: true, shared: true } : { ok: false, shared: true, error: j.error || "respuesta no válida" };
+    } catch (err) { return { ok: false, shared: true, error: "sin conexión con la hoja de Google" }; }
+  },
+  async top(ex, L) {
+    if (!this.shared()) return { shared: false, list: this.localList(ex, L) };
+    try {
+      const r = await fetch(`${this.url()}?action=top&ex=${encodeURIComponent(ex)}&level=${L}`);
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error);
+      return { shared: true, list: j.list };
+    } catch (err) { return { shared: false, offline: true, list: this.localList(ex, L) }; }
+  },
+  // Tabla accesible de clasificación.
+  table(list, highlight) {
+    if (!list.length) return h("p", { style: "margin:0;color:var(--muted)" }, "Todavía no hay puntuaciones en esta aventura e intensidad.");
+    return h("table", { class: "sk" },
+      h("thead", {}, h("tr", {}, h("th", {}, "#"), h("th", {}, "Nombre"), h("th", {}, "Puntos"), h("th", {}, "A la primera"), h("th", {}, "Tiempo"))),
+      h("tbody", {}, ...list.slice(0, 10).map((e, i) => h("tr", { style: highlight && e.id === highlight ? "background:rgba(255,181,61,.15)" : null },
+        h("td", { class: "n" }, String(i + 1)), h("td", {}, e.name), h("td", { class: "n" }, String(e.score)), h("td", { class: "n" }, `${e.first}/${CONFIG.RETOS}`), h("td", { class: "n" }, fmtTime(e.time))))));
+  },
+};
+const fmtTime = s => { s = Math.round(s); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+
+// ═════════════════════════════════════════════ 10. Persistencia local
+const Store = {
+  data: { prefs: { reduce: null, sound: true, ex: "rocas", level: 1 }, best: {} },
+  load() { try { const s = localStorage.getItem(CONFIG.STORE); if (s) this.data = Object.assign(this.data, JSON.parse(s)); } catch (e) { /* almacenamiento no disponible */ } },
+  save() { try { localStorage.setItem(CONFIG.STORE, JSON.stringify(this.data)); } catch (e) { /* sin persistencia */ } },
+  clear() { try { localStorage.removeItem(CONFIG.STORE); } catch (e) { /* nada que borrar */ } this.data = { prefs: { reduce: null, sound: true, ex: "rocas", level: 1 }, best: {} }; },
+  best(ex, L) { return this.data.best?.[ex]?.[L] ?? null; },
+  setBest(ex, L, v) { this.data.best[ex] = this.data.best[ex] || {}; if ((this.data.best[ex][L] ?? -1) < v) this.data.best[ex][L] = v; this.save(); },
+};
+
+// ═════════════════════════════════════════════ 9. UI accesible
+const $ = id => document.getElementById(id);
+function h(tag, props, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k === "class") el.className = v; else if (k.startsWith("on")) el.addEventListener(k.slice(2), v); else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const k of kids) if (k !== null && k !== undefined && k !== "") el.append(k);
+  return el;
+}
+
+// Base: posiciones de los dioramas en la isla.
+const HUB = { R: 13, pos: {} };
+EX_ORDER.forEach((id, i) => {
+  if (id === "tour") { HUB.pos[id] = [0, -2]; return; }
+  const a = -Math.PI / 2 + (i / 8) * Math.PI * 2 + Math.PI / 8;
+  HUB.pos[id] = [Math.cos(a) * HUB.R, Math.sin(a) * HUB.R];
+});
+
+const App = {
+  screen: "cover", now: 0, last: 0, motionScale: 1, reduceMotion: false, lowPower: false,
+  exId: "rocas", level: 1, seedFixed: null, S: null, cur: null,
+  avatar: { x: 0, z: 18, ry: Math.PI, tx: null, tz: null, run: 0 }, keys: new Set(), stick: [0, 0],
+  camEye: [0, 14, 34], camTarget: [0, 0, 0], transition: null,
+
+  boot() {
+    Store.load();
+    const sysReduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    this.setReduce(Store.data.prefs.reduce ?? sysReduce);
+    this.exId = EX[Store.data.prefs.ex] ? Store.data.prefs.ex : "rocas";
+    this.level = clamp(Store.data.prefs.level || 1, 1, 10);
+    this.lowPower = (navigator.hardwareConcurrency || 4) <= 2;
+    const r = Engine.init($("gl"));
+    if (!r.ok) { $("nogl").hidden = false; $("noglMsg").textContent = r.msg + " El parque necesita WebGL2: prueba con una versión reciente de Chrome, Edge, Firefox o Safari con la aceleración por hardware activada."; return; }
+    Labels.init($("labels"));
+    this.buildMap(); this.bindUI(); this.bindInput();
+    Engine.resize(); addEventListener("resize", () => Engine.resize());
+    document.addEventListener("visibilitychange", () => { Music.pause(document.hidden); this.last = performance.now(); });
+    this.last = performance.now();
+    requestAnimationFrame(t => this.loop(t));
+  },
+  setReduce(v) { this.reduceMotion = !!v; this.motionScale = v ? 0.35 : 1; $("optMotion").checked = !!v; },
+  toast(msg) { const el = $("toast"); el.textContent = msg; el.hidden = false; clearTimeout(this._toast); this._toast = setTimeout(() => el.hidden = true, 2600); },
+  show(name) {
+    for (const s of ["cover", "map", "act", "sum"]) $(s).hidden = s !== name;
+    this.screen = name; Fx.clear(); Labels.begin(); Labels.end();
+    Music.setScene(name === "act" ? EX[this.cur.ex].music : "base");
+  },
+
+  // ───────── mapa / selector
+  buildMap() {
+    const list = $("attrList"); list.innerHTML = "";
+    EX_ORDER.forEach(id => {
+      const e = EX[id];
+      list.append(h("li", { role: "presentation" }, h("button", { type: "button", class: "attr", role: "option", id: "opt-" + id, "aria-selected": "false", onclick: () => this.selectEx(id, true) },
+        h("span", { class: "ico", style: `background:${e.tint}22;color:${e.tint};border:1px solid ${e.tint}` }, e.icon),
+        h("span", {}, h("span", { class: "nm" }, e.name), h("span", { class: "sk" }, e.skill)))));
+    });
+    const lv = $("levels"); lv.innerHTML = "";
+    for (let L = 1; L <= 10; L++) lv.append(h("button", { type: "button", role: "radio", "aria-checked": "false", "aria-label": "Intensidad " + L, onclick: () => this.selectLevel(L),
+      onkeydown: e => { if (e.key === "ArrowRight" || e.key === "ArrowUp") { this.selectLevel(Math.min(10, this.level + 1)); lv.children[this.level - 1].focus(); e.preventDefault(); } if (e.key === "ArrowLeft" || e.key === "ArrowDown") { this.selectLevel(Math.max(1, this.level - 1)); lv.children[this.level - 1].focus(); e.preventDefault(); } } }, String(L)));
+    this.selectEx(this.exId, false); this.selectLevel(this.level);
+  },
+  selectEx(id, walk) {
+    this.exId = id; Store.data.prefs.ex = id; Store.save();
+    for (const b of document.querySelectorAll(".attr")) b.setAttribute("aria-selected", b.id === "opt-" + id ? "true" : "false");
+    const e = EX[id];
+    $("attrDetail").innerHTML = "";
+    $("attrDetail").append(h("h3", { style: `color:${e.tint}` }, e.name), h("p", { style: "color:var(--muted);font-size:14px" }, e.skill), h("p", {}, e.blurb));
+    if (walk) { const [x, z] = HUB.pos[id]; this.avatar.tx = x; this.avatar.tz = z + 3.2; }
+    this.updateLevelDesc();
+  },
+  selectLevel(L) {
+    this.level = L; Store.data.prefs.level = L; Store.save();
+    [...$("levels").children].forEach((b, i) => { const on = i + 1 === L; b.setAttribute("aria-checked", on ? "true" : "false"); b.tabIndex = on ? 0 : -1; });
+    this.updateLevelDesc();
+  },
+  updateLevelDesc() {
+    const best = Store.best(this.exId, this.level);
+    $("lvlDesc").textContent = EX[this.exId].level(this.level) + (best !== null ? ` Tu mejor resultado: ${best}/${CONFIG.RETOS} a la primera.` : "");
+  },
+
+  bindUI() {
+    $("btnOpen").addEventListener("click", () => { Music.setEnabled(Store.data.prefs.sound !== false); this.show("map"); $("attrList").querySelector('[aria-selected="true"]')?.focus(); });
+    $("btnRide").addEventListener("click", () => this.startSession(this.exId, this.level));
+    $("btnNearRide").addEventListener("click", () => { if (this.near) { this.selectEx(this.near, false); this.startSession(this.near, this.level); } });
+    $("optMotion").addEventListener("change", e => { this.setReduce(e.target.checked); Store.data.prefs.reduce = e.target.checked; Store.save(); });
+    $("optSound").checked = Store.data.prefs.sound !== false;
+    $("optSound").addEventListener("change", e => { Store.data.prefs.sound = e.target.checked; Store.save(); Music.setEnabled(e.target.checked); });
+    $("btnClear").addEventListener("click", () => $("dlgClear").showModal());
+    $("dlgClearNo").addEventListener("click", () => $("dlgClear").close());
+    $("dlgClearYes").addEventListener("click", () => { Store.clear(); $("dlgClear").close(); this.updateLevelDesc(); this.toast("Progreso borrado."); });
+    $("btnTeacher").addEventListener("click", () => { $("seedIn").value = this.seedFixed ?? (this.S?.seed ?? ""); $("dlgTeacher").showModal(); });
+    $("dlgTeacherClose").addEventListener("click", () => $("dlgTeacher").close());
+    $("btnRank").addEventListener("click", () => this.showRanking());
+    $("dlgRankClose").addEventListener("click", () => $("dlgRank").close());
+    const rkState = () => { $("rkState").textContent = Ranking.shared() ? "Estado: ranking compartido activado." : "Estado: ranking solo local (no hay URL válida de Apps Script)."; };
+    $("btnTeacher").addEventListener("click", () => { $("rkUrl").value = Ranking.url(); rkState(); });
+    $("rkSave").addEventListener("click", () => {
+      const v = $("rkUrl").value.trim();
+      if (v && !/^https:\/\/script\.google(usercontent)?\.com\/.+\/exec$/.test(v)) { this.toast("La URL debe ser la de la aplicación web de Apps Script y terminar en /exec."); return; }
+      Store.data.prefs.rankingUrl = v; Store.save(); rkState(); this.toast(v ? "Ranking compartido configurado." : "Ranking compartido desactivado.");
+    });
+    $("rkTest").addEventListener("click", async () => {
+      $("rkState").textContent = "Probando conexión…";
+      const t = await Ranking.top("rocas", 1);
+      $("rkState").textContent = t.shared ? "Conexión correcta con la hoja de Google." : "No se pudo conectar: revisa la URL y que la implementación tenga acceso «Cualquier usuario».";
+    });
+    $("seedUse").addEventListener("click", () => { const v = parseInt($("seedIn").value, 10); if (Number.isFinite(v) && v >= 0) { this.seedFixed = v; this.toast(`Semilla ${v}: la próxima sesión usará estos retos.`); } else this.toast("La semilla debe ser un número entero positivo."); });
+    $("seedRandom").addEventListener("click", () => { this.seedFixed = null; $("seedIn").value = ""; this.toast("Cada sesión usará una semilla nueva."); });
+    $("seedCopy").addEventListener("click", () => { const v = $("seedIn").value; if (navigator.clipboard?.writeText) navigator.clipboard.writeText(v).then(() => this.toast("Semilla copiada."), () => { $("seedIn").select(); this.toast("Selecciona y copia la semilla."); }); else { $("seedIn").select(); this.toast("Selecciona y copia la semilla."); } });
+    $("runTests").addEventListener("click", () => { $("testOut").textContent = "Ejecutando…"; setTimeout(() => $("testOut").textContent = Tests.run().text, 30); });
+    $("btnCheck").addEventListener("click", () => this.doCheck());
+    $("btnHint").addEventListener("click", () => this.doHint());
+    $("btnReplay").addEventListener("click", () => this.doReplay());
+    $("btnNew").addEventListener("click", () => this.doNew());
+    $("btnNext").addEventListener("click", () => this.nextChallenge());
+    $("btnBack").addEventListener("click", () => { this.S = null; this.show("map"); });
+  },
+
+  bindInput() {
+    addEventListener("keydown", e => {
+      const tag = (e.target.tagName || "").toLowerCase(), typing = tag === "input";
+      if (this.screen === "map" && !typing && !e.target.closest?.("dialog")) {
+        const k = e.key.toLowerCase();
+        if (["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(k) && (e.target === document.body || e.target === $("gl"))) { this.keys.add(k); e.preventDefault(); }
+        if (e.key === "Enter" && this.near && (e.target === document.body || e.target === $("gl"))) { this.selectEx(this.near, false); this.startSession(this.near, this.level); }
+      }
+      if (this.screen === "act" && this.cur && !typing) {
+        const ex = EX[this.cur.ex];
+        if (ex.key && (e.target === document.body || e.target === $("gl") || e.target.closest?.("#controls")) && ex.key(this.cur.q, this.cur.st, e, this.api())) e.preventDefault();
+        if (e.key === "Enter" && (e.target === document.body || e.target === $("gl"))) { this.doCheck(); e.preventDefault(); }
+      }
+      if (this.screen === "act" && typing && e.key === "Enter") { this.doCheck(); e.preventDefault(); }
+    });
+    addEventListener("keyup", e => this.keys.delete(e.key.toLowerCase()));
+    addEventListener("blur", () => this.keys.clear());
+    const cv = $("gl");
+    cv.addEventListener("pointerdown", e => {
+      const id = Engine.hitTest(e.clientX, e.clientY);
+      if (this.screen === "map") {
+        if (id?.startsWith("hub:")) { const ex = id.slice(4); this.selectEx(ex, true); return; }
+        const g = Engine.groundHit(e.clientX, e.clientY, 0.4); if (g) { this.avatar.tx = g[0]; this.avatar.tz = g[2]; }
+      } else if (this.screen === "act" && this.cur && id) {
+        const ex = EX[this.cur.ex]; ex.pick?.(this.cur.q, this.cur.st, id, this.api());
+      }
+    });
+    const stick = $("stick"); let sid = null;
+    const mv = e => { const r = stick.getBoundingClientRect(); let x = (e.clientX - r.left - r.width / 2) / 45, y = (e.clientY - r.top - r.height / 2) / 45; const l = Math.hypot(x, y); if (l > 1) { x /= l; y /= l; } this.stick = [x, y]; stick.style.setProperty("--sx", x * 34 + "px"); stick.style.setProperty("--sy", y * 34 + "px"); };
+    stick.addEventListener("pointerdown", e => { sid = e.pointerId; stick.setPointerCapture(sid); mv(e); });
+    stick.addEventListener("pointermove", e => { if (e.pointerId === sid) mv(e); });
+    stick.addEventListener("pointerup", () => { sid = null; this.stick = [0, 0]; stick.style.setProperty("--sx", "0px"); stick.style.setProperty("--sy", "0px"); });
+  },
+
+  // ───────── sesión
+  startSession(exId, level) {
+    const seed = this.seedFixed ?? newSeed();
+    this.S = { exId, level, seed, rng: makeRng(seed), idx: 0, results: [], prevEx: null, mission: 1, stop: 0 };
+    this.cur = null;
+    this.nextChallenge(true);
+  },
+  makeChallenge(exReal) {
+    const ex = EX[exReal]; let q = null;
+    for (let i = 0; i < 25; i++) { const c = ex.make(this.S.rng, this.S.level); if (ex.validate(c).length === 0) { q = c; break; } }
+    if (!q) throw new Error("No se pudo generar un reto válido para " + exReal);
+    return { ex: exReal, q, st: ex.init(q), attempts: 0, hints: 0, demo: false, solved: false, tags: [], inputs: {}, t0: this.now, animT: 0 };
+  },
+  nextChallenge(first) {
+    const S = this.S;
+    if (!first) S.idx++;
+    if (S.idx >= CONFIG.RETOS) return this.summary();
+    let real = S.exId;
+    if (S.exId === "tour") {
+      const opts = EX_PLAY.filter(id => id !== S.prevEx); real = S.rng.pick(opts); S.prevEx = real;
+      const N = EX.tour.stops(S.level); S.stop++; if (S.stop > N) { S.mission++; S.stop = 1; }
+      if (!first) this.transition = { t0: this.now, from: this.camEye.slice() };
+    }
+    this.cur = this.makeChallenge(real);
+    if (first) this.show("act"); else { Fx.clear(); Music.setScene(EX[real].music); }
+    this.renderTask();
+    if (first) { const lb = $("btnCheck"); lb.focus({ preventScroll: true }); }
+  },
+  api() {
+    const app = this, cur = this.cur;
+    return {
+      ctl: $("controls"), h,
+      p: t => h("p", { style: "margin:0;line-height:1.45" }, t),
+      btn: (label, fn, aria) => h("button", { type: "button", class: "btn", "aria-label": aria || null, onclick: fn }, label),
+      num(label, id, disabled) {
+        const inp = h("input", { id, type: "text", inputmode: "numeric", autocomplete: "off", spellcheck: "false", disabled: disabled ? true : null, "aria-describedby": "feedback",
+          oninput: e => { cur.inputs[id] = e.target.value; } });
+        inp.value = cur.inputs[id] ?? "";
+        return h("div", { class: "field" }, h("label", { for: id }, label), inp, h("button", { type: "button", class: "btn", "aria-label": "Cambiar el signo", onclick: () => { const v = inp.value.trim(); inp.value = v.startsWith("-") || v.startsWith("−") ? v.slice(1) : "−" + v.replace(/^\+/, ""); cur.inputs[id] = inp.value; inp.focus(); } }, "±"));
+      },
+      val: id => cur.inputs[id] ?? $(id)?.value ?? "",
+      say: (msg, kind) => app.say(msg, kind),
+      refresh: () => app.refreshControls(),
+      focus: id => setTimeout(() => $(id)?.focus(), 30),
+      registerError: (tag, msg) => { cur.attempts++; cur.tags.push(tag); app.say(msg, "bad"); app.updateHud(); },
+    };
+  },
+  renderTask() {
+    const c = this.cur, ex = EX[c.ex], S = this.S;
+    $("actName").textContent = S.exId === "tour" ? `${EX.tour.name} · ${ex.name}` : ex.name;
+    $("actLevel").textContent = "Intensidad " + S.level;
+    $("tourTag").hidden = S.exId !== "tour";
+    if (S.exId === "tour") $("tourTag").textContent = `Misión ${S.mission} · parada ${S.stop} de ${EX.tour.stops(S.level)}`;
+    $("prompt").innerHTML = "";
+    $("prompt").append(h("span", {}, ex.skill + ". "), this.promptText(c));
+    this.say("", null);
+    $("btnNext").hidden = true; $("btnCheck").hidden = false; $("btnCheck").disabled = false; $("btnHint").disabled = false;
+    $("btnNew").textContent = "Nuevo reto";
+    this.refreshControls(); this.updateHud();
+  },
+  promptText(c) {
+    const q = c.q;
+    const big = t => h("span", { class: "expr" }, t);
+    switch (c.ex) {
+      case "rocas": return h("span", {}, "Salta, en este orden, a las rocas: ", big(q.values.map(fmt).join("  →  ")));
+      case "vertical": return h("span", {}, "Ordena de la cota más baja a la más alta: ", big(q.values.map(fmt).join("   ")));
+      case "lago": return q.sub === "opabs" ? h("span", {}, `El farolillo flota a ${fmt(q.n)} m.`, big(`opuesto de ${fmt(q.n)} · |${fmt(q.n)}|`))
+        : q.sub === "absk" ? h("span", {}, "Dos farolillos cuelgan de hilos iguales.", big(`|x| = ${q.k}`)) : h("span", {}, "¿Qué farolillo está más alto?", big(`${q.e1}  ☐  ${q.e2}`));
+      case "globo": return h("span", {}, "El globo parte de la cota 0.", big(q.terms.map((x, i) => i ? fmtP(x) : fmt(x)).join(" + ")));
+      case "avion": return h("span", {}, `Cota actual ${fmt(q.a)} m. Orden de la torre:`, big(`${fmt(q.a)} − ${fmtP(q.b)}`));
+      case "sub": return h("span", {}, "Posición = tiempo · velocidad", big(`${fmt(q.a)} · ${fmtP(q.b)}`));
+      case "tele": return h("span", {}, "Cambio por minuto = cambio total : tiempo", big(`${fmt(q.a)} : ${fmtP(q.b)}`));
+      case "dron": return h("span", {}, "Programa de vuelo:", big(tokensToString(q.tokens)));
+    }
+    return h("span", {}, q.text);
+  },
+  refreshControls() { const c = this.cur; if (!c) return; const ctl = $("controls"); ctl.innerHTML = ""; EX[c.ex].ui(c.q, c.st, this.api()); },
+  say(msg, kind) {
+    const f = $("feedback"); f.innerHTML = ""; f.className = "";
+    if (!msg) return;
+    f.className = "show " + (kind || "");
+    const icon = kind === "ok" ? "✓ Correcto." : kind === "bad" ? "✗ Todavía no." : kind === "hint" ? "◆ Pista." : kind === "part" ? "✓ Bien." : "";
+    if (icon) f.append(h("span", { class: "ic" }, icon));
+    f.append(document.createTextNode(msg));
+  },
+  updateHud() {
+    const S = this.S, cells = $("cells"); cells.innerHTML = "";
+    for (let i = 0; i < CONFIG.RETOS; i++) {
+      const r = S.results[i]; let cls = "", txt = "";
+      if (r) { cls = r.firstTry ? "ok" : "help"; txt = r.firstTry ? "✓" : "◆"; }
+      if (i === S.idx && !(r)) cls = "cur";
+      cells.append(h("span", { class: cls, title: `Reto ${i + 1}` }, txt));
+    }
+    const ok = S.results.filter(r => r.firstTry).length, att = S.results.reduce((s, r) => s + r.attempts, 0) + (this.cur && !this.cur.solved ? this.cur.attempts : 0);
+    const hl = S.results.reduce((s, r) => s + r.hints, 0) + (this.cur && !this.cur.solved ? this.cur.hints : 0);
+    const pts = S.results.reduce((s, r) => s + (r?.score || 0), 0);
+    $("actStats").textContent = `Reto ${Math.min(S.idx + 1, CONFIG.RETOS)}/${CONFIG.RETOS} · ${pts} puntos · a la primera ${ok} · errores ${att} · ayudas ${hl}`;
+    $("cells").setAttribute("aria-label", `Progreso: reto ${S.idx + 1} de ${CONFIG.RETOS}, ${ok} a la primera`);
+  },
+  doCheck() {
+    const c = this.cur; if (!c || c.solved) return;
+    const r = EX[c.ex].check(c.q, c.st, this.api());
+    if (r.notReady) { this.say(r.msg, "hint"); return; }
+    if (r.partial) { this.say(r.msg, "part"); this.refreshControls(); Music.cue("success"); return; }
+    if (r.ok) {
+      c.solved = true;
+      const secs = Math.max(0, this.now - c.t0 - c.animT);
+      const res = { ex: c.ex, firstTry: c.attempts === 0 && c.hints === 0 && !c.demo, attempts: c.attempts, hints: c.hints + (c.demo ? 1 : 0), tags: c.tags,
+        time: secs, score: scoreChallenge(this.S.level, secs, c.attempts, c.hints, c.demo) };
+      this.S.results[this.S.idx] = res;
+      this.say(`${r.msg} (+${res.score} puntos en ${fmtTime(secs)})`, "ok"); Music.cue("success");
+      if (c.ex !== "rocas" && c.ex !== "dron") setTimeout(() => confetti([0, 3, 0], 50), 900 * this.motionScale);
+      $("btnNext").hidden = false; $("btnNext").textContent = this.S.idx + 1 >= CONFIG.RETOS ? "Ver resultados" : "Siguiente reto";
+      $("btnCheck").hidden = true; $("btnHint").disabled = true;
+      $("btnNext").focus();
+      this.refreshControls(); this.updateHud();
+      return;
+    }
+    c.attempts++; if (r.tag) c.tags.push(r.tag);
+    this.say(r.msg, "bad"); Music.cue("fail"); this.refreshControls(); this.updateHud();
+  },
+  doHint() {
+    const c = this.cur; if (!c || c.solved) return;
+    const ex = EX[c.ex];
+    if (c.hints < 2) { c.hints++; this.say(ex.hint(c.q, c.st, c.hints), "hint"); }
+    else if (!c.demo) {
+      c.demo = true; ex.demo(c.q, c.st); Music.cue("hint");
+      this.say("Mira la demostración. Después puedes reintentar con valores equivalentes: pulsa «Nuevo reto».", "hint");
+      $("btnNew").textContent = "Reintentar con valores equivalentes";
+      this.refreshControls();
+    } else this.say("Ya has visto la demostración. Pulsa «Reintentar con valores equivalentes» para practicar con otros números.", "hint");
+    if (c.hints === 2 && !c.demo) $("btnHint").textContent = "Ver demostración"; else $("btnHint").textContent = "Pista";
+    this.updateHud();
+  },
+  doReplay() {
+    const st = this.cur?.st; if (!st) return;
+    if (st.anim) { st.anim.t0 = this.now; st.party = 0; for (const k of Object.keys(st)) if (k.startsWith("splash")) delete st[k]; Music.cue("whoosh", 1); this.say("Repitiendo la animación.", "hint"); }
+    else this.say("Todavía no hay ninguna animación: responde o pide una pista.", "hint");
+  },
+  doNew() {
+    const c = this.cur; if (!c) return;
+    const helped = c.demo || c.hints > 0;
+    const prev = { hints: c.hints, demo: c.demo, attempts: c.attempts, tags: c.tags };
+    this.cur = this.makeChallenge(c.ex);
+    if (helped) Object.assign(this.cur, { hints: prev.hints, demo: prev.demo, attempts: prev.attempts, tags: prev.tags, t0: c.t0, animT: c.animT });
+    $("btnHint").textContent = "Pista";
+    Fx.clear(); this.renderTask();
+    this.say(helped ? "Reto equivalente con otros números. Las ayudas usadas siguen contando en este reto." : "Nuevo reto con otros números.", "hint");
+  },
+  summary() {
+    const S = this.S, R = S.results;
+    const first = R.filter(r => r.firstTry).length;
+    const total = R.reduce((s, r) => s + r.score, 0), time = R.reduce((s, r) => s + r.time, 0);
+    Store.setBest(S.exId, S.level, first);
+    const bySkill = {};
+    for (const r of R) { const k = r.ex; bySkill[k] = bySkill[k] || { n: 0, first: 0, err: 0, help: 0 }; bySkill[k].n++; bySkill[k].first += r.firstTry ? 1 : 0; bySkill[k].err += r.attempts; bySkill[k].help += r.hints; }
+    const tagCount = {}; for (const r of R) for (const t of r.tags) tagCount[t] = (tagCount[t] || 0) + 1;
+    const weakest = Object.entries(bySkill).sort((a, b) => a[1].first / a[1].n - b[1].first / b[1].n || b[1].err - a[1].err)[0];
+    let reco;
+    if (first === CONFIG.RETOS) reco = `Todo a la primera. Prueba ${EX[S.exId].name} en intensidad ${Math.min(10, S.level + 1)}${S.level === 10 ? " (ya estás en la máxima: prueba La gran expedición)" : ""}.`;
+    else if (weakest) {
+      const [k, v] = weakest, lvl = v.first / v.n < 0.5 ? Math.max(1, S.level - 1) : S.level;
+      const topTag = Object.entries(tagCount).sort((a, b) => b[1] - a[1])[0];
+      reco = `Practica ${EX[k].name} (${EX[k].skill.toLowerCase()}) en intensidad ${lvl}.${topTag ? ` Fíjate especialmente en: ${TAGS[topTag[0]].toLowerCase()}.` : ""}`;
+    }
+    const card = $("sumCard"); card.innerHTML = "";
+    card.append(
+      h("h2", { id: "sumTitle" }, first >= 6 ? "¡Expedición superada!" : "Expedición completada"),
+      h("p", { style: "margin:0;color:var(--muted)" }, `${EX[S.exId].name} · intensidad ${S.level} · semilla ${S.seed}`),
+      h("div", { class: "score" },
+        h("div", {}, h("b", { style: "color:var(--amber)" }, String(total)), h("span", {}, `puntos (máx. ${maxScore(S.level)})`)),
+        h("div", {}, h("b", {}, fmtTime(time)), h("span", {}, "tiempo pensando")),
+        h("div", {}, h("b", {}, `${first}/${CONFIG.RETOS}`), h("span", {}, "a la primera")),
+        h("div", {}, h("b", {}, String(R.reduce((s, r) => s + r.attempts, 0))), h("span", {}, "errores")),
+        h("div", {}, h("b", {}, String(R.reduce((s, r) => s + r.hints, 0))), h("span", {}, "ayudas"))),
+      h("table", { class: "sk" }, h("thead", {}, h("tr", {}, h("th", {}, "Destreza"), h("th", {}, "Retos"), h("th", {}, "A la primera"), h("th", {}, "Errores"))),
+        h("tbody", {}, ...Object.entries(bySkill).map(([k, v]) => h("tr", {}, h("td", {}, `${EX[k].skill} (${EX[k].name})`), h("td", { class: "n" }, String(v.n)), h("td", { class: "n" }, String(v.first)), h("td", { class: "n" }, String(v.err)))))),
+      Object.keys(tagCount).length ? h("div", {}, h("h3", { style: "font-size:20px;margin-bottom:6px" }, "Errores observados"),
+        h("ul", { style: "margin:0;padding-left:20px;line-height:1.6" }, ...Object.entries(tagCount).sort((a, b) => b[1] - a[1]).map(([t, n]) => h("li", {}, `${TAGS[t]} (${n})`)))) : h("p", { style: "margin:0" }, "No se ha observado ningún error típico."),
+      h("div", { class: "reco" }, h("strong", {}, "Práctica recomendada: "), reco || "Sigue explorando otras aventuras."),
+      this.rankingBox(S, { total, time, first }),
+      h("div", { class: "row" },
+        h("button", { type: "button", class: "btn primary", onclick: () => this.startSession(S.exId, S.level) }, "Repetir"),
+        h("button", { type: "button", class: "btn", onclick: () => { this.show("map"); this.selectEx(S.exId, false); $("levels").children[this.level - 1].focus(); } }, "Cambiar intensidad"),
+        h("button", { type: "button", class: "btn", onclick: () => { this.show("map"); $("attrList").querySelector('[aria-selected="true"]')?.focus(); } }, "Otra aventura")));
+    this.show("sum"); Music.cue(first >= 6 ? "fanfare" : "success");
+    card.querySelector("button").focus();
+  },
+
+  rankingBox(S, r) {
+    const box = h("div", { class: "detail" }), listEl = h("div", { "aria-live": "polite" }, "Cargando ranking…");
+    const status = h("p", { style: "margin:0;font-size:14px;color:var(--muted)", role: "status" }, "");
+    const inp = h("input", { id: "rkName", type: "text", maxlength: "20", autocomplete: "nickname", placeholder: "Nombre o alias" });
+    inp.value = Store.data.prefs.alias || "";
+    const send = h("button", { type: "button", class: "btn primary" }, "Guardar en el ranking");
+    const load = async id => {
+      const t = await Ranking.top(S.exId, S.level); listEl.innerHTML = ""; listEl.append(Ranking.table(t.list, id));
+      if (!status.textContent || status.textContent === "Guardando…") status.textContent = t.shared ? "Ranking compartido de la clase." : t.offline ? "No hay conexión con la hoja de Google: se muestra el ranking de este navegador." : "Ranking de este navegador (el docente puede activar el ranking compartido).";
+    };
+    send.addEventListener("click", async () => {
+      const name = Ranking.cleanName(inp.value);
+      if (name.length < 2) { status.textContent = "Escribe un nombre o alias de al menos 2 letras (sin datos personales)."; inp.focus(); return; }
+      Store.data.prefs.alias = name; Store.save();
+      send.disabled = true; status.textContent = "Guardando…";
+      const entry = { id: S.seed + "-" + Date.now(), name, ex: S.exId, level: S.level, score: r.total, first: r.first, time: Math.round(r.time), seed: S.seed, date: new Date().toISOString().slice(0, 10) };
+      const res = await Ranking.submit(entry);
+      status.textContent = res.ok ? (res.shared ? "Guardado en el ranking de la clase." : "Guardado en el ranking de este navegador.") : `Guardado solo en este navegador: ${res.error}.`;
+      await load(entry.id);
+    });
+    box.append(h("h3", {}, `Ranking · ${EX[S.exId].name} · intensidad ${S.level}`),
+      h("div", { class: "field" }, h("label", { for: "rkName" }, "Tu alias"), inp, send), status, listEl);
+    load(null);
+    return box;
+  },
+  async showRanking() {
+    const d = $("dlgRank"), out = $("rankOut");
+    $("rankTitle").textContent = `Ranking · ${EX[this.exId].name} · intensidad ${this.level}`;
+    out.textContent = "Cargando…"; d.showModal();
+    const t = await Ranking.top(this.exId, this.level);
+    out.innerHTML = "";
+    out.append(Ranking.table(t.list), h("p", { style: "font-size:14px;color:var(--muted)" }, t.shared ? "Ranking compartido de la clase." : t.offline ? "Sin conexión con la hoja de Google: ranking de este navegador." : "Ranking de este navegador."));
+  },
+
+  // ───────── bucle
+  loop(tms) {
+    requestAnimationFrame(t => this.loop(t));
+    if (document.hidden || !Engine.ok) { this.last = tms; return; }
+    const dt = Math.min(0.05, (tms - this.last) / 1000); this.last = tms; this.now += dt;
+    Engine.resize();
+    Fx.update(dt);
+    let eye, target;
+    Labels.begin();
+    Engine.ox = 0; Engine.oz = 0;
+    if (this.screen === "act" && this.cur && !(this.transition && this.now - this.transition.t0 < 1.6 * this.motionScale)) {
+      this.transition = null;
+      const ex = EX[this.cur.ex];
+      Engine.fogColor = hex(ex.fog);
+      [eye, target] = ex.cam(this.cur.q, this.cur.st);
+      // Aleja un poco la cámara y desplaza la escena a la izquierda del panel de reto en pantallas anchas.
+      const dir = V.sub(eye, target); eye = V.add(target, V.scale(dir, innerWidth / innerHeight < 1 ? 1.45 : 1.15));
+      if (innerWidth > 760) { const sh = V.len(dir) * 0.2; eye = [eye[0] + sh, eye[1], eye[2]]; target = [target[0] + sh, target[1], target[2]]; }
+      this.camEye = V.lerp(this.camEye, eye, Math.min(1, dt * 3)); this.camTarget = V.lerp(this.camTarget, target, Math.min(1, dt * 3));
+      Engine.begin(this.camEye, this.camTarget);
+      ex.draw(Engine, this.now, dt, this.cur.q, this.cur.st);
+      const an = this.cur.st.anim;
+      if (!this.cur.solved && an && this.now - an.t0 < an.dur) this.cur.animT += dt;
+    } else {
+      Engine.fogColor = hex(0x0c1d24);
+      this.updateAvatar(dt);
+      const a = this.avatar;
+      if (this.transition) { const p = ease(clamp((this.now - this.transition.t0) / (1.6 * this.motionScale), 0, 1)); eye = [Math.sin(p * Math.PI) * 10, 30 - p * 8, 26 - p * 6]; target = [0, 0, 0]; }
+      else if (this.screen === "map") { eye = [a.x, 10, a.z + 12]; target = [a.x, 0.5, a.z - 3]; }
+      else { eye = [0, 16, 32]; target = [0, 0, 0]; }
+      this.camEye = V.lerp(this.camEye, eye, Math.min(1, dt * 2.5)); this.camTarget = V.lerp(this.camTarget, target, Math.min(1, dt * 2.5));
+      Engine.begin(this.camEye, this.camTarget);
+      this.drawHub(Engine, this.now);
+      Music.mood.intensity = 0.25 + a.run * 0.2; Music.mood.height = 0; Music.mood.under = 0; Music.mood.rewind = 0;
+    }
+    Engine.ox = 0; Engine.oz = 0;
+    Fx.draw(Engine);
+    Engine.end();
+    Labels.end();
+  },
+  updateAvatar(dt) {
+    const a = this.avatar; if (this.screen !== "map") { a.run = 0; return; }
+    let ix = (this.keys.has("d") || this.keys.has("arrowright") ? 1 : 0) - (this.keys.has("a") || this.keys.has("arrowleft") ? 1 : 0) + this.stick[0];
+    let iz = (this.keys.has("s") || this.keys.has("arrowdown") ? 1 : 0) - (this.keys.has("w") || this.keys.has("arrowup") ? 1 : 0) + this.stick[1];
+    if (ix || iz) { a.tx = null; } else if (a.tx !== null) { const dx = a.tx - a.x, dz = a.tz - a.z, d = Math.hypot(dx, dz); if (d > 0.15) { ix = dx / d; iz = dz / d; } else a.tx = null; }
+    const l = Math.hypot(ix, iz); if (l > 1) { ix /= l; iz /= l; }
+    const sp = 4.5; a.x += ix * sp * dt; a.z += iz * sp * dt;
+    const r = Math.hypot(a.x, a.z); if (r > 21) { a.x *= 21 / r; a.z *= 21 / r; }
+    a.run = Math.min(1, Math.hypot(ix, iz));
+    if (a.run > 0.05) { const tr = Math.atan2(ix, iz); let d = tr - a.ry; d = Math.atan2(Math.sin(d), Math.cos(d)); a.ry += d * Math.min(1, dt * 10); }
+    // ¿Cerca de un diorama?
+    let near = null, bd = 4.2;
+    for (const id of EX_ORDER) { const [x, z] = HUB.pos[id], d = Math.hypot(a.x - x, a.z - z); if (d < bd) { bd = d; near = id; } }
+    if (near !== this.near) { this.near = near; $("nearTag").hidden = !near; if (near) { $("nearName").textContent = EX[near].name; if (near !== this.exId) this.selectEx(near, false); Music.cue("tick", 4); } }
+  },
+  drawHub(E, t) {
+    Env.stars(E, t, 90, 90);
+    E.box(0, -0.3, 0, 200, 0.2, 200, hex(0x0f3a4a), { a: 1 });
+    Env.water(E, t, 120, 120, -0.15, hex(0x175e75), 0.7);
+    E.cyl(0, -0.2, 0, 23, 0.6, hex(0x24423a));
+    E.cyl(0, 0.0, 0, 21.5, 0.25, hex(0x2e5a46));
+    E.cyl(0, 0.1, 0, 5, 0.1, hex(0x3b4a52));
+    for (let i = 0; i < 16; i++) { const a = i / 16 * Math.PI * 2, x = Math.cos(a) * 19, z = Math.sin(a) * 19; E.cyl(x, 1.2, z, 0.06, 2.4, COL.steel); E.sph(x, 2.5, z, 0.18, COL.amber, { emis: 0.9 }); }
+    // Rótulo de la base y cero central.
+    E.box(0, 0.6, -2, 0.6, 0.6, 0.6, COL.zero, { ry: t * 0.6, rz: Math.PI / 4, emis: 0.5 });
+    for (const id of EX_ORDER) {
+      const [x, z] = HUB.pos[id], e = EX[id], sel = id === this.exId;
+      E.ox = x; E.oz = z;
+      E.cyl(0, 0.15, 0, 2.6, 0.15, sel ? hex(0x4a3e22) : hex(0x2b3f44));
+      E.ring(0, 0.24, 0, 5.4, sel ? COL.amber : hex(0x557077), { a: sel ? 0.7 : 0.4, emis: sel ? 0.8 : 0.2 });
+      if (id === "tour") { for (let k = 0; k < 8; k++) { const a = k / 8 * Math.PI * 2; E.beam([Math.cos(a) * 1.6, 0.3, Math.sin(a) * 1.6], [0, 3.2, 0], 0.05, CONFETTI[k % 6], { emis: 0.5 }); } E.sph(0, 3.4, 0, 0.35, COL.amber, { emis: 1 }); }
+      else { E.ox = x; E.oz = z; e.diorama(E, t); }
+      E.ox = 0; E.oz = 0;
+      E.pick("hub:" + id, [x, 1, z], 2.6);
+      const da = Math.hypot(this.avatar.x - x, this.avatar.z - z);
+      if (this.screen === "map" && (sel || da < 10)) Labels.put("hub" + id, e.name, [x, 4.6, z], "title");
+    }
+    const a = this.avatar;
+    Models.hero(E, a.x, 0.2, a.z, a.ry, t, a.run);
+    if (a.tx !== null) E.ring(a.tx, 0.25, a.tz, 0.7, COL.amber, { a: 0.6, emis: 1 });
+  },
+};
+
+// ═════════════════════════════════════════════ 11. Autopruebas
+const Tests = {
+  run() {
+    const lines = [], t0 = performance.now(); let total = 0, bad = 0;
+    for (const id of EX_PLAY) {
+      const ex = EX[id]; let n = 0, fails = [];
+      for (let L = 1; L <= 10; L++) for (let k = 0; k < 10; k++) {
+        const rng = makeRng(1000 * L + 17 * k + id.length * 7919);
+        let q;
+        try { q = ex.make(rng, L); } catch (err) { fails.push(`L${L}: excepción ${err.message}`); continue; }
+        const errs = ex.validate(q).concat(this.extra(id, q));
+        n++; total++;
+        if (errs.length) { bad++; if (fails.length < 3) fails.push(`L${L}: ${errs.join(", ")}`); }
+      }
+      lines.push(`${fails.length ? "✗" : "✓"} ${ex.name}: ${n} casos${fails.length ? " · " + fails.join(" | ") : ""}`);
+    }
+    // Reproducibilidad de la semilla.
+    const a = JSON.stringify(EX.globo.make(makeRng(42), 5)), b = JSON.stringify(EX.globo.make(makeRng(42), 5));
+    lines.push(`${a === b ? "✓" : "✗"} La misma semilla genera el mismo reto`);
+    if (a !== b) bad++;
+    const text = `${total - bad}/${total} casos válidos en ${Math.round(performance.now() - t0)} ms\n` + lines.join("\n");
+    return { ok: bad === 0, total, bad, text };
+  },
+  // Comprobaciones independientes del validador de cada reto.
+  extra(id, q) {
+    const e = [], d = D(q.level);
+    if (id === "rocas") { if (q.values.some(v => !q.ticks.includes(v))) e.push("valor sin roca"); }
+    if (id === "vertical") { for (let i = 1; i < q.answer.length; i++) if (!(q.answer[i - 1] < q.answer[i])) e.push("orden no estricto"); }
+    if (id === "lago" && q.sub === "absk" && q.k === 0) e.push("k=0 da respuesta única ambigua");
+    if (id === "globo") { if (!isInt(q.answer)) e.push("no entero"); if (q.level >= 2 && !(q.terms.some(x => x > 0) && q.terms.some(x => x < 0))) e.push("sin signos mezclados"); }
+    if (id === "avion") { if (q.answer !== q.a + (-q.b)) e.push("resta ≠ suma del opuesto"); }
+    if (id === "sub") { if (Math.abs(q.a) > d.factor || Math.abs(q.b) > d.factor) e.push("factor fuera de tabla"); }
+    if (id === "tele") { if (q.b === 0) e.push("divisor cero"); else if (q.a % q.b !== 0) e.push("no exacta"); if (q.answer * q.b !== q.a) e.push("comprobación inversa"); }
+    if (id === "dron") {
+      const sol = solveTokens(q.tokens);
+      if (!sol.ok) e.push("no resoluble");
+      else for (const s of sol.steps) { if (!isInt(s.result)) e.push("intermedio no entero"); if (s.op === "/" && (s.b === 0 || s.a % s.b)) e.push("división no exacta"); }
+      // Respuesta única: el resultado no depende del orden válido elegido.
+      const alt = this.anyOrder(q.tokens);
+      if (alt.size !== 1) e.push("varios resultados posibles según el orden válido");
+    }
+    return e;
+  },
+  anyOrder(tk, out = new Set(), depth = 0) {
+    if (tk.length === 1) { out.add(tk[0].v); return out; }
+    if (depth > 6) return out;
+    tk.forEach((_, k) => { if (opAllowed(tk, k)) { const r = applyOp(tk, k); if (r) this.anyOrder(r.tokens, out, depth + 1); } });
+    return out;
+  },
+};
+
+// ═════════════════════════════════════════════ 12. Arranque
+addEventListener("DOMContentLoaded", () => App.boot());
+
+</script>
+</body>
+</html>

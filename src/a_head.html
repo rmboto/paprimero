@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Parque Cota Cero</title>
+<!--
+PARQUE COTA CERO · Números enteros · 1.º ESO · WebGL2 puro (sin bibliotecas, sin red)
+
+Referencias: dossier del encargo («Feria Neón 84», remix racionales, pod, La caverna, PRISMA, Trenes MCM) y
+«Paseo por el IES Concejo de Tineo» (personaje en 3.ª persona, HUD translúcido, joystick táctil).
+
+Decisiones de diseño:
+- En lugar de atracciones, nueve aventuras alrededor de la «cota cero» (el nivel del mar). La base es una isla
+  que se recorre caminando (WASD/flechas, joystick o tocando el suelo); al acercarse a un diorama, se selecciona.
+  Un selector accesible duplica todo para teclado y proyector. Cámara estable, sin pointer lock.
+- Cada animación muestra la causa matemática: reflejo en el lago, parejas burbuja/saco que se anulan,
+  palanca que convierte restar en sumar el opuesto, película que se rebobina con el tiempo negativo…
+- Música procedural (Web Audio) con un tema por escena que sigue a la animación: el arpegio sube con la altura,
+  el filtro se cierra bajo el agua, la melodía se invierte al rebobinar, chapoteos, pings de sonar y fanfarrias.
+- Motor propio: GLSL inline, VAO/VBO/IBO, instancing por geometría, matrices, picking por rayos.
+- Paleta: cian = positivo, coral = negativo, cero neutro con rombo ◇; ámbar = objetivo, menta = acierto, violeta = pista.
+
+Mapa de aventuras:
+ 1 Saltarrocas (situar)            2 Expedición vertical (ordenar)     3 El lago espejo (opuesto y |n|)
+ 4 Globo aerostático (sumar)       5 Avión anfibio (restar)            6 Submarino del tiempo (multiplicar)
+ 7 Teleférico (dividir)            8 Dron de rescate (combinadas)      9 La gran expedición (misión mixta)
+
+Autopruebas (panel docente): 100 casos por aventura (10 por nivel) + reproducibilidad de semilla.
+Última ejecución durante el desarrollo: 800/800 casos válidos y semilla reproducible.
+-->
+<style>
+:root {
+  --night: #0b1a20;
+  --night-2: #102730;
+  --panel: rgba(13, 31, 38, 0.86);
+  --panel-solid: #12303a;
+  --line: rgba(243, 236, 217, 0.18);
+  --ivory: #f3ecd9;
+  --muted: #b9c4bf;
+  --amber: #ffb53d;
+  --pos: #3fd6e8;
+  --neg: #ff6f86;
+  --zero: #e6e1d3;
+  --ok: #5ef0b0;
+  --hint: #b79bff;
+  --display: "Bahnschrift", "DIN Condensed", "Arial Narrow", "Roboto Condensed", "Liberation Sans Narrow", sans-serif;
+  --ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--night); color: var(--ivory); font-family: var(--ui); font-size: 16px; overflow: hidden; }
+[hidden] { display: none !important; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 3px solid var(--amber); outline-offset: 2px; }
+.num, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.pos { color: var(--pos); } .neg { color: var(--neg); } .zero { color: var(--zero); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+#gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+#labels { position: fixed; inset: 0; pointer-events: none; z-index: 1; overflow: hidden; }
+.lbl { position: absolute; left: 0; top: 0; transform: translate(-50%, -50%); font-family: var(--mono); font-weight: 700;
+  font-size: 18px; padding: 2px 7px; border-radius: 6px; background: rgba(8, 20, 25, .78); border: 1px solid var(--line);
+  white-space: nowrap; font-variant-numeric: tabular-nums; line-height: 1.25; }
+.lbl.big { font-size: 26px; padding: 3px 10px; }
+.lbl.small { font-size: 13px; padding: 1px 5px; }
+.lbl.title { font-family: var(--display); font-weight: 700; font-size: 17px; letter-spacing: .06em; text-transform: uppercase; color: var(--amber); }
+.lbl.pos { border-color: var(--pos); color: var(--pos); }
+.lbl.neg { border-color: var(--neg); color: var(--neg); }
+.lbl.zero { border-color: var(--zero); color: var(--zero); }
+.lbl.goal { border-color: var(--amber); color: var(--amber); }
+.lbl.ok { border-color: var(--ok); color: var(--ok); }
+.lbl.hint { border-color: var(--hint); color: var(--hint); }
+
+.screen { position: fixed; inset: 0; z-index: 2; pointer-events: none; }
+.screen > * { pointer-events: auto; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; backdrop-filter: blur(8px);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, .35); }
+.btn { min-height: 44px; min-width: 44px; padding: 8px 16px; border-radius: 10px; border: 1px solid var(--line);
+  background: rgba(243, 236, 217, .08); font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.btn:hover { background: rgba(243, 236, 217, .16); }
+.btn.primary { background: var(--amber); color: #1d1405; border-color: var(--amber); font-family: var(--display); font-size: 19px; letter-spacing: .04em; }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.hint { border-color: var(--hint); color: var(--hint); }
+.btn[disabled] { opacity: .45; cursor: not-allowed; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+h1, h2, h3 { font-family: var(--display); font-weight: 700; margin: 0; letter-spacing: .02em; text-wrap: balance; }
+
+/* Portada */
+#cover { display: grid; place-items: center; padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+#cover .card { max-width: 560px; padding: 28px; display: grid; gap: 14px; text-align: left; }
+#cover .eyebrow { font-family: var(--display); color: var(--amber); letter-spacing: .2em; text-transform: uppercase; font-size: 15px; }
+#cover h1 { font-size: clamp(44px, 9vw, 76px); line-height: .95; }
+#cover h1 .zero-mark { color: var(--zero); }
+#cover p { margin: 0; color: var(--muted); line-height: 1.55; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 14px; color: var(--muted); }
+.legend b { font-family: var(--mono); font-size: 16px; }
+
+/* Mapa */
+#map { padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); }
+#mapPanel { position: absolute; top: max(12px, env(safe-area-inset-top)); left: max(12px, env(safe-area-inset-left)); bottom: max(12px, env(safe-area-inset-bottom));
+  width: min(400px, calc(100vw - 24px)); display: flex; flex-direction: column; overflow: hidden; }
+#mapPanel header { padding: 14px 16px 8px; display: grid; gap: 4px; }
+#mapPanel header h2 { font-size: 30px; }
+#mapPanel header p { margin: 0; color: var(--muted); font-size: 14px; }
+#mapScroll { overflow-y: auto; padding: 4px 16px 16px; display: grid; gap: 14px; }
+.attr-list { display: grid; gap: 6px; list-style: none; margin: 0; padding: 0; }
+.attr { width: 100%; text-align: left; display: grid; grid-template-columns: 44px 1fr; gap: 10px; align-items: center;
+  padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: rgba(243, 236, 217, .04); min-height: 56px; }
+.attr[aria-selected="true"] { border-color: var(--amber); background: rgba(255, 181, 61, .12); }
+.attr .ico { width: 44px; height: 44px; border-radius: 9px; display: grid; place-items: center; font-family: var(--display); font-size: 22px; font-weight: 700; }
+.attr .nm { font-family: var(--display); font-size: 19px; font-weight: 700; display: block; }
+.attr .sk { font-size: 13px; color: var(--muted); display: block; }
+.detail { border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 8px; background: rgba(0, 0, 0, .18); }
+.detail h3 { font-size: 24px; }
+.detail p { margin: 0; line-height: 1.45; font-size: 15px; }
+.levels { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.levels button { min-height: 44px; border-radius: 9px; border: 1px solid var(--line); background: rgba(243, 236, 217, .05); font-family: var(--mono); font-size: 18px; font-weight: 700; }
+.levels button[aria-checked="true"] { background: var(--amber); color: #1d1405; border-color: var(--amber); }
+.lvl-desc { font-size: 14px; color: var(--ivory); line-height: 1.5; background: rgba(255, 181, 61, .08); border-left: 3px solid var(--amber); padding: 8px 10px; border-radius: 4px; }
+.toggles { display: grid; gap: 6px; font-size: 14px; }
+.toggles label { display: flex; align-items: center; gap: 10px; min-height: 44px; }
+.toggles input { width: 22px; height: 22px; accent-color: var(--amber); }
+#walkHint { position: absolute; right: max(16px, env(safe-area-inset-right)); top: max(16px, env(safe-area-inset-top)); padding: 10px 14px; font-size: 14px; color: var(--muted); max-width: 300px; line-height: 1.5; }
+#walkHint kbd, .kbd { font-family: var(--mono); font-size: 13px; border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; color: var(--ivory); background: rgba(255,255,255,.06); }
+#nearTag { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(24px + env(safe-area-inset-bottom)); padding: 10px 16px; display: flex; gap: 12px; align-items: center; }
+#nearTag strong { font-family: var(--display); font-size: 22px; }
+
+/* Actividad */
+#hud { position: absolute; top: max(8px, env(safe-area-inset-top)); left: max(8px, env(safe-area-inset-left)); right: max(8px, env(safe-area-inset-right));
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 8px 12px; }
+#hud .name { font-family: var(--display); font-size: 22px; font-weight: 700; }
+#hud .lv { font-family: var(--mono); color: var(--amber); font-size: 14px; border: 1px solid var(--amber); border-radius: 6px; padding: 1px 7px; }
+.cells { display: flex; gap: 4px; }
+.cells span { width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--line); display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+.cells span.cur { border-color: var(--amber); box-shadow: 0 0 0 2px rgba(255, 181, 61, .35); }
+.cells span.ok { background: var(--ok); color: #062015; border-color: var(--ok); }
+.cells span.help { background: var(--hint); color: #160c33; border-color: var(--hint); }
+.cells span.skip { background: rgba(243,236,217,.15); }
+#hud .stats { font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+#hud .spacer { flex: 1; }
+#task { position: absolute; right: max(8px, env(safe-area-inset-right)); bottom: max(8px, env(safe-area-inset-bottom)); width: min(440px, calc(100vw - 16px));
+  max-height: calc(100% - 110px); overflow-y: auto; padding: 14px; display: grid; gap: 10px; }
+#task .tour { font-family: var(--display); color: var(--amber); letter-spacing: .12em; text-transform: uppercase; font-size: 14px; }
+#prompt { font-size: 18px; line-height: 1.4; }
+#prompt .expr { display: block; font-family: var(--mono); font-size: clamp(24px, 4.5vw, 34px); font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+#controls { display: grid; gap: 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { min-height: 44px; min-width: 56px; padding: 6px 12px; border-radius: 10px; border: 2px solid var(--line); background: rgba(0,0,0,.25); font-family: var(--mono); font-size: 20px; font-weight: 700; }
+.chip.pos { border-color: var(--pos); } .chip.neg { border-color: var(--neg); } .chip.zero { border-color: var(--zero); }
+.chip[aria-pressed="true"] { background: var(--amber); color: #1d1405; border-color: var(--amber); }
+.chip.done { opacity: .55; text-decoration: underline; }
+.chip .ord { font-size: 13px; margin-left: 6px; color: inherit; }
+.field { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.field label { font-size: 15px; color: var(--muted); }
+.field input { width: 130px; min-height: 44px; border-radius: 9px; border: 2px solid var(--line); background: rgba(0,0,0,.35); padding: 4px 10px; font-family: var(--mono); font-size: 22px; font-weight: 700; }
+.field input:focus { border-color: var(--amber); }
+.expr-ops { font-family: var(--mono); font-size: clamp(22px, 4vw, 30px); font-weight: 700; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.expr-ops button { min-width: 44px; min-height: 44px; border-radius: 8px; border: 2px dashed var(--amber); background: rgba(255,181,61,.1); font-weight: 700; }
+.expr-ops button[disabled] { border-style: solid; opacity: .5; }
+.expr-ops .done { color: var(--ok); }
+.actions { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+.actions .primary { grid-column: 1 / -1; }
+#feedback { min-height: 24px; border-radius: 10px; padding: 0; line-height: 1.45; font-size: 16px; }
+#feedback.show { padding: 10px 12px; border: 1px solid var(--line); }
+#feedback.ok { border-color: var(--ok); background: rgba(94, 240, 176, .1); }
+#feedback.bad { border-color: var(--neg); background: rgba(255, 111, 134, .1); }
+#feedback.hint { border-color: var(--hint); background: rgba(183, 155, 255, .1); }
+#feedback .ic { font-family: var(--display); font-weight: 700; margin-right: 6px; }
+.lever { display: flex; align-items: center; gap: 10px; }
+.lever .btn[aria-pressed="true"] { background: var(--pos); color: #04202a; border-color: var(--pos); }
+
+/* Resumen */
+#sum { display: grid; place-items: center; padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+#sum .card { width: min(640px, 100%); max-height: 100%; overflow-y: auto; padding: 22px; display: grid; gap: 14px; }
+#sum h2 { font-size: 36px; }
+.score { display: flex; gap: 18px; flex-wrap: wrap; }
+.score div { display: grid; }
+.score b { font-family: var(--mono); font-size: 34px; }
+.score span { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+table.sk { width: 100%; border-collapse: collapse; font-size: 15px; }
+table.sk th, table.sk td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+table.sk td.n { font-family: var(--mono); text-align: right; }
+.reco { border-left: 3px solid var(--hint); padding: 8px 12px; background: rgba(183,155,255,.08); border-radius: 4px; line-height: 1.5; }
+
+/* Diálogos */
+dialog { background: var(--panel-solid); color: var(--ivory); border: 1px solid var(--line); border-radius: 14px; padding: 20px; width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 32px); }
+dialog::backdrop { background: rgba(4, 10, 12, .65); }
+dialog h3 { font-size: 26px; margin-bottom: 8px; }
+dialog p { line-height: 1.5; }
+dialog .field input { width: 200px; font-size: 18px; }
+#testOut { font-family: var(--mono); font-size: 13px; white-space: pre-wrap; max-height: 240px; overflow: auto; background: rgba(0,0,0,.3); padding: 8px; border-radius: 8px; }
+
+#stick { position: absolute; width: 120px; height: 120px; border-radius: 50%; border: 2px solid var(--line); background: rgba(255,255,255,.05);
+  right: calc(max(16px, env(safe-area-inset-right)) + 8px); bottom: calc(96px + env(safe-area-inset-bottom)); touch-action: none; }
+#stick::after { content: ""; position: absolute; left: 40px; top: 40px; width: 40px; height: 40px; border-radius: 50%; background: rgba(255,255,255,.28); transform: translate(var(--sx, 0px), var(--sy, 0px)); }
+@media (hover: hover) and (pointer: fine) { #stick { display: none; } }
+
+#nogl { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 24px; background: var(--night); }
+#nogl .card { max-width: 560px; padding: 24px; line-height: 1.55; }
+#toast { position: fixed; left: 50%; top: calc(70px + env(safe-area-inset-top)); transform: translateX(-50%); z-index: 6; padding: 8px 14px; pointer-events: none; }
+
+@media (max-width: 760px) {
+  #mapPanel { top: auto; height: 56%; width: auto; right: max(8px, env(safe-area-inset-right)); left: max(8px, env(safe-area-inset-left)); bottom: max(8px, env(safe-area-inset-bottom)); }
+  #walkHint { display: none; }
+  #nearTag { bottom: calc(58% + 8px); }
+  #stick { bottom: calc(58% + 70px); }
+  #task { left: max(8px, env(safe-area-inset-left)); width: auto; max-height: 52%; }
+  #hud .name { font-size: 18px; }
+  #prompt { font-size: 16px; }
+}
+@media (max-width: 760px) and (orientation: landscape) {
+  #mapPanel { top: max(8px, env(safe-area-inset-top)); height: auto; width: 46%; right: auto; }
+  #nearTag { bottom: 12px; left: 73%; }
+  #task { left: auto; width: 52%; max-height: calc(100% - 80px); }
+  #stick { bottom: 80px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<canvas id="gl" aria-label="Escena 3D del parque" role="img"></canvas>
+<div id="labels" aria-hidden="true"></div>
+
+<section id="cover" class="screen" aria-labelledby="coverTitle">
+  <div class="card">
+    <div class="eyebrow">Números enteros · 1.º ESO</div>
+    <h1 id="coverTitle">Parque Cota <span class="zero-mark">◇</span>Cero</h1>
+    <p>Una isla en la cota cero, el nivel del mar. Por encima vuelan avionetas y globos; por debajo bucean submarinos. Pasea por la base, elige una aventura y una intensidad del 1 al 10, y descubre por qué sale cada resultado.</p>
+    <div class="legend" aria-label="Código de colores">
+      <span><b class="pos">+3</b> positivo · arriba/derecha</span>
+      <span><b class="neg">−3</b> negativo · abajo/izquierda</span>
+      <span><b class="zero">◇ 0</b> cero</span>
+    </div>
+    <div class="row"><button class="btn primary" id="btnOpen" type="button">Abrir las puertas</button></div>
+  </div>
+</section>
+
+<section id="map" class="screen" aria-labelledby="mapTitle" hidden>
+  <div id="mapPanel" class="card">
+    <header>
+      <h2 id="mapTitle">Base Cota Cero</h2>
+      <p>Elige aventura e intensidad, o camina hasta su diorama.</p>
+    </header>
+    <div id="mapScroll">
+      <ul class="attr-list" id="attrList" role="listbox" aria-label="Aventuras"></ul>
+      <div class="detail" id="attrDetail" aria-live="polite"></div>
+      <div>
+        <h3 style="font-size:20px;margin-bottom:6px" id="lvlTitle">Intensidad</h3>
+        <div class="levels" id="levels" role="radiogroup" aria-labelledby="lvlTitle"></div>
+      </div>
+      <div class="lvl-desc" id="lvlDesc" aria-live="polite"></div>
+      <button class="btn primary" id="btnRide" type="button">Empezar la aventura</button>
+      <div class="toggles">
+        <label><input type="checkbox" id="optMotion"> Reducir movimiento</label>
+        <label><input type="checkbox" id="optSound"> Sonido</label>
+      </div>
+      <div class="row">
+        <button class="btn" id="btnRank" type="button">Ranking</button>
+        <button class="btn" id="btnTeacher" type="button">Panel docente</button>
+        <button class="btn" id="btnClear" type="button">Borrar progreso</button>
+      </div>
+    </div>
+  </div>
+  <div id="walkHint" class="card"><strong>Pasea por la base:</strong> <span class="kbd">W A S D</span> o flechas, o toca el suelo. Acércate a un diorama y pulsa <span class="kbd">Intro</span>.</div>
+  <div id="nearTag" class="card" hidden><strong id="nearName"></strong><button class="btn primary" id="btnNearRide" type="button">Empezar</button></div>
+  <div id="stick" aria-hidden="true"></div>
+</section>
+
+<section id="act" class="screen" aria-labelledby="actName" hidden>
+  <div id="hud" class="card">
+    <span class="name" id="actName"></span>
+    <span class="lv" id="actLevel"></span>
+    <div class="cells" id="cells" aria-label="Progreso de la sesión"></div>
+    <span class="stats" id="actStats"></span>
+    <span class="spacer"></span>
+    <button class="btn" id="btnBack" type="button">Volver a la base</button>
+  </div>
+  <div id="task" class="card">
+    <div class="tour" id="tourTag" hidden></div>
+    <div id="prompt"></div>
+    <div id="controls"></div>
+    <div class="actions">
+      <button class="btn primary" id="btnCheck" type="button">Comprobar</button>
+      <button class="btn hint" id="btnHint" type="button">Pista</button>
+      <button class="btn" id="btnReplay" type="button">Repetir animación</button>
+      <button class="btn" id="btnNew" type="button">Nuevo reto</button>
+      <button class="btn primary" id="btnNext" type="button" hidden>Siguiente reto</button>
+    </div>
+    <div id="feedback" role="status" aria-live="polite"></div>
+  </div>
+</section>
+
+<section id="sum" class="screen" aria-labelledby="sumTitle" hidden>
+  <div class="card" id="sumCard"></div>
+</section>
+
+<dialog id="dlgClear" aria-labelledby="dlgClearT">
+  <h3 id="dlgClearT">¿Borrar el progreso?</h3>
+  <p>Se borrarán los mejores resultados y las preferencias guardadas en este navegador. No se puede deshacer.</p>
+  <div class="row"><button class="btn" id="dlgClearNo" type="button">Cancelar</button><button class="btn primary" id="dlgClearYes" type="button">Borrar</button></div>
+</dialog>
+
+<dialog id="dlgTeacher" aria-labelledby="dlgTeacherT">
+  <h3 id="dlgTeacherT">Panel docente</h3>
+  <p>La semilla reproduce exactamente los mismos retos. Compártela con el grupo para que todos trabajen con los mismos números.</p>
+  <div class="field"><label for="seedIn">Semilla</label><input id="seedIn" type="text" inputmode="numeric" autocomplete="off"></div>
+  <div class="row" style="margin:10px 0">
+    <button class="btn" id="seedUse" type="button">Usar esta semilla</button>
+    <button class="btn" id="seedCopy" type="button">Copiar</button>
+    <button class="btn" id="seedRandom" type="button">Semilla nueva</button>
+  </div>
+  <h3 style="font-size:20px;margin:14px 0 6px">Ranking compartido (Google Sheets)</h3>
+  <div class="field"><label for="rkUrl">URL de Apps Script</label><input id="rkUrl" type="url" autocomplete="off" placeholder="https://script.google.com/macros/s/…/exec" style="width:100%"></div>
+  <div class="row" style="margin:8px 0"><button class="btn" id="rkSave" type="button">Guardar URL</button><button class="btn" id="rkTest" type="button">Probar conexión</button></div>
+  <p id="rkState" role="status" style="margin:0 0 12px;font-size:14px;color:var(--muted)"></p>
+  <div class="row" style="margin-bottom:8px"><button class="btn" id="runTests" type="button">Ejecutar autopruebas</button></div>
+  <div id="testOut" aria-live="polite">Las autopruebas generan 100 retos por atracción y verifican rango, divisiones exactas, intermedios enteros, respuesta única y validador.</div>
+  <div class="row" style="margin-top:12px"><button class="btn primary" id="dlgTeacherClose" type="button">Cerrar</button></div>
+</dialog>
+
+<dialog id="dlgRank" aria-labelledby="rankTitle">
+  <h3 id="rankTitle">Ranking</h3>
+  <div id="rankOut" aria-live="polite"></div>
+  <div class="row" style="margin-top:12px"><button class="btn primary" id="dlgRankClose" type="button">Cerrar</button></div>
+</dialog>
+
+<div id="toast" class="card" role="status" aria-live="polite" hidden></div>
+<div id="nogl" hidden><div class="card" role="alert"><h2>Este navegador no puede mostrar el parque en 3D</h2><p id="noglMsg">El parque necesita WebGL2. Prueba con una versión reciente de Chrome, Edge, Firefox o Safari, y comprueba que la aceleración por hardware está activada.</p></div></div>
